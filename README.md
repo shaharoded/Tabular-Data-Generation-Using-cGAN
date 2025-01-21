@@ -86,7 +86,7 @@ Average AUC for efficacy (cGAN): 0.63
 
 One of the most critical evaluations of the generated data is how well the feature distributions of real and synthetic datasets match. Below is a comparison of the feature distributions, highlighting the effectiveness of the cGAN in replicating the real data distribution.
 
-![Feature Distribution](./Images/feature_analysis_cGAN.png)
+![Feature Distribution](./Images/features_analysis_cGAN.png)
 
 The plots show histograms of features from both real and synthetic datasets. Ideally, the synthetic data's feature distributions should closely resemble those of the real data.
 
