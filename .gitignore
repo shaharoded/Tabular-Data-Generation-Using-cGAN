@@ -1,0 +1,8 @@
+# Ignore specific files
+
+
+# Ignore an entire folder
+Data/
+Trained Models/
+venv/
+__pycache__/
