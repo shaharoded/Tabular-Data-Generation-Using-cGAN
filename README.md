@@ -4,7 +4,7 @@
 
 This project aims to generate synthetic tabular data using Conditional Generative Adversarial Networks (cGAN). The approach utilizes both real and synthetic data to train models that can effectively mimic the distributions and relationships of features in the original dataset. The model is evaluated based on its ability to generate data with similar feature distributions and its performance in downstream tasks, such as detection and efficacy when used for training a Random Forest model.
 
-![Model Architecture](./images/cGAN.png)
+![Model Architecture](./Images/cGAN.png)
 
 Key highlights:
 - **Conditional GAN**: The model generates synthetic data conditioned on categorical labels, ensuring that the generated data closely matches the characteristics of the original data.
@@ -86,7 +86,7 @@ Average AUC for efficacy (cGAN): 0.63
 
 One of the most critical evaluations of the generated data is how well the feature distributions of real and synthetic datasets match. Below is a comparison of the feature distributions, highlighting the effectiveness of the cGAN in replicating the real data distribution.
 
-![Feature Distribution](./images/feature_analysis_cGAN.png)
+![Feature Distribution](./Images/feature_analysis_cGAN.png)
 
 The plots show histograms of features from both real and synthetic datasets. Ideally, the synthetic data's feature distributions should closely resemble those of the real data.
 
@@ -94,7 +94,7 @@ The plots show histograms of features from both real and synthetic datasets. Ide
 
 Another critical evaluation metric is the correlation between features. The heatmap below illustrates the difference in correlations between the real and synthetic data, highlighting any discrepancies in feature relationships.
 
-![Correlation Heatmap](./images/cGAN_corr.png)
+![Correlation Heatmap](./Images/cGAN_corr.png)
 
 The closer the correlation difference is to zero, the better the synthetic data mimics the real data in terms of feature interrelationships.
 
