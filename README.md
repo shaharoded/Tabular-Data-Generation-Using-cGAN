@@ -4,6 +4,8 @@
 
 This project aims to generate synthetic tabular data using Conditional Generative Adversarial Networks (cGAN). The approach utilizes both real and synthetic data to train models that can effectively mimic the distributions and relationships of features in the original dataset. The model is evaluated based on its ability to generate data with similar feature distributions and its performance in downstream tasks, such as detection and efficacy when used for training a Random Forest model.
 
+Unlike my other projects, this entire project is trainable on CPU.
+
 ![Model Architecture](./Images/cGAN.png)
 
 Key highlights:
