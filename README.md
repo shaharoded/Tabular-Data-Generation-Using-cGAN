@@ -44,7 +44,7 @@ pip install -r requirements.txt
 
 ## Features
 
-- **Conditional GAN (cGAN)**: The project utilizes a Conditional Generative Adversarial Network to generate synthetic tabular data. The cGAN is conditioned on class labels, ensuring that the generated data matches the feature distribution of each class in the original dataset.
+- **GAN and Conditional GAN (cGAN)**: The project utilizes both a Generative Adversarial Network (GAN) and a Conditional Generative Adversarial Network (cGAN) to generate synthetic tabular data. The cGAN is conditioned on class labels, ensuring that the generated data matches the feature distribution of each class in the original dataset.
   
 - **Data Preprocessing**: 
   - One-hot encoding for categorical features to avoid any ordering in the categorical data.
