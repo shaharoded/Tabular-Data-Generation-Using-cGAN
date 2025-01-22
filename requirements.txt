@@ -3,6 +3,7 @@ pandas
 numpy
 scipy
 scikit-learn
+imblearn
 tqdm
 matplotlib
 seaborn

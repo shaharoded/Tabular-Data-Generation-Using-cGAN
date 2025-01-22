@@ -295,10 +295,21 @@ class GAN(nn.Module):
         with torch.no_grad():
             synthetic_data = self.generator(z)
         
-        # Round categorical columns to -1 or 1 based on the column indices (if present in the dataset)
-        for idx in self.cat_column_indices:
-            # Round generated values of categorical columns to -1 or 1
-            synthetic_data[:, idx] = torch.sign(synthetic_data[:, idx])
+        # Post-process categorical columns
+        for group in self.cat_column_indices:
+            # Iterate over each group of categorical columns
+            for row in range(synthetic_data.size(0)):  # Iterate over rows
+                row_data = synthetic_data[row, group]  # Extract the group of columns for the current row
+
+                # Find the index of the max value in the row for this group
+                max_val_idx = row_data.argmax().item()  # Max value in the group for this row (get the scalar index)
+
+                # Map the relative index (within the group) to the global index in the full row
+                global_idx = group[max_val_idx]  # This gives the actual column index in the full row
+
+                # Set all values in the group to -1, then set the max value to 1
+                synthetic_data[row, group] = -1  # Set all values in this group to -1
+                synthetic_data[row, global_idx] = 1  # Mark the highest value as 1 in the global index
         
         return synthetic_data
     
@@ -469,15 +480,15 @@ if __name__ == "__main__":
                     disc_config=DISCRIMINATOR_CONFIG,
                     pretrained_path=PRETRAIN_PATH)
         
-        # model.train_model(train_loader=train_loader, 
-        #     epochs=EPOCHS,
-        #     warm_up=WARMUP_EPOCHS, 
-        #     lr=BASE_LEARNING_RATE, 
-        #     weight_decay=WEIGHT_DECAY, 
-        #     device=DEVICE, 
-        #     early_stop=EARLY_STOP,
-        #     gen_update_freq=GENERATOR_UPDATE_FREQ, 
-        #     save_path=PRETRAIN_PATH)
+        model.train_model(train_loader=train_loader, 
+            epochs=EPOCHS,
+            warm_up=WARMUP_EPOCHS, 
+            lr=BASE_LEARNING_RATE, 
+            weight_decay=WEIGHT_DECAY, 
+            device=DEVICE, 
+            early_stop=EARLY_STOP,
+            gen_update_freq=GENERATOR_UPDATE_FREQ, 
+            save_path=PRETRAIN_PATH)
         
         synthetic = model.generate(
             num_samples=1, 

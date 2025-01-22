@@ -4,6 +4,7 @@ from scipy.io import arff
 import torch
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+from imblearn.over_sampling import SMOTE
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -17,6 +18,8 @@ class TabularDataset(Dataset):
     augmentation, and stratified train-validation-test splitting.
 
     Attributes:
+        - df: The data as pd.DataFrame object
+        - meta: Metadata on the df (columns and types)
         - features: Processed feature DataFrame (normalized and one-hot encoded).
         - targets: Target labels as a categorical variable.
         - num_features: Number of features after preprocessing.
@@ -35,10 +38,12 @@ class TabularDataset(Dataset):
         self.target_column = target_column
         self.augment = augment
         self.cat_column_indices = []
+        self.features = []
+        self.targets = []
 
         # Load ARFF file
-        self.data, self.meta = arff.loadarff(file_path)
-        self.df = pd.DataFrame(self.data)
+        data, self.meta = arff.loadarff(file_path)
+        self.df = pd.DataFrame(data)
 
         # Display initial dataset information if requested
         if info:
@@ -47,35 +52,56 @@ class TabularDataset(Dataset):
         # Preprocess the data (normalization and encoding)
         self.__preprocess()
 
-    def __print_info(self):
+    def __one_hot_encode(self):
         """
-        Print initial dataset information such as row/column counts,
-        target class distribution, and column details.
+        Custom one-hot encoding function for categorical columns.
+        - '?' is treated as 'Unknown'.
+        - Existing categorical values are mapped to their respective columns.
+        - Null values are set to 0.
+        - The one-hot encoded columns are normalized to range [-1, 1].
         """
-        print("[Info]: Initial Dataset Summary")
+        # Separate continuous and categorical columns
+        cont_cols = self.df.select_dtypes(include=["number"]).columns
+        cat_cols = self.df.select_dtypes(include=["object", "category"]).columns
 
-        # Number of rows and columns
-        num_rows, num_cols = self.df.shape
-        print(f"[Info]: Number of rows: {num_rows}")
-        print(f"[Info]: Number of columns: {num_cols}")
+        # Remove the target column from categorical columns if it exists
+        cat_cols = [col for col in cat_cols if col != self.target_column]
 
-        # Target class distribution
-        target_dist = self.df[self.target_column].value_counts(normalize=True)
-        print(f"[Info]: Target class distribution:\n{target_dist}\n")
+        # Initialize a df with numerical columns to build on cat columns
+        # Sort columns: numeric first, then categorical (one-hot encoded)
+        encoded_df = self.df[cont_cols].copy()
 
-        # Null values in columns
-        null_values = self.df.isnull().sum()
-        print(f"[Info]: Null values in each column:\n{null_values}\n")
+        # One-hot encode categorical columns
+        for col in cat_cols:
+            # Replace '?' with 'Unknown'
+            self.df[col] = self.df[col].replace('?', 'Unknown')
+            unique_values = self.df[col].unique()
 
-        # One-hot encoded column count
-        df_encoded = pd.get_dummies(self.df, drop_first=True)
-        print(f"[Info]: Number of columns after one-hot encoding: {df_encoded.shape[1]}")
+            # Generate one-hot columns and store the indices
+            one_hot_columns = []
+            for value in unique_values:
+                # Create a new column for the value
+                encoded_col = (self.df[col] == value).astype(int)
+                one_hot_columns.append(encoded_col)
+
+            # Concatenate the one-hot columns from 1 original cat column
+            one_hot_df = pd.concat(one_hot_columns, axis=1)
+            one_hot_df = one_hot_df * 2 - 1  # Normalize to [-1, 1]
+
+            # Update the encoded dataframe with the one-hot columns
+            encoded_df = pd.concat([encoded_df, one_hot_df], axis=1)
+
+            # Store the indices of the one-hot encoded columns
+            self.cat_column_indices.append(list(range(len(encoded_df.columns) - len(one_hot_columns), len(encoded_df.columns))))
+
+        # Save the updated dataframe
+        self.features = encoded_df
 
     def __preprocess(self):
         """
         Preprocess the dataset:
         - Normalize continuous features using MinMax scaling.
-        - One-hot encode categorical features.
+        - One-hot encode categorical features manually, treating '?' as a distinct category.
         
         All vector inputs are normalized to [-1,1] range to ensure consistency.
         """
@@ -83,71 +109,65 @@ class TabularDataset(Dataset):
 
         # Separate target column and features
         self.targets = self.df[self.target_column].astype("category").cat.codes
-        
-        features = self.df.drop(columns=[self.target_column])
+
+        all_features = self.df.drop(columns=[self.target_column])
 
         # Normalize continuous features
-        cont_cols = features.select_dtypes(include=["number"]).columns
+        cont_cols = all_features.select_dtypes(include=["number"]).columns
         scaler = MinMaxScaler(feature_range=(-1, 1))  # Modify the range to [-1, 1]
-        features[cont_cols] = scaler.fit_transform(features[cont_cols])
+        self.df[cont_cols] = scaler.fit_transform(all_features[cont_cols])
 
-        # One-hot encode categorical features
-        cat_cols = features.select_dtypes(include=["object", "category"]).columns
-        cat_encoded = pd.get_dummies(features[cat_cols], drop_first=True).astype(int)
-        cat_encoded = cat_encoded * 2 - 1 # Modify the range to [-1, 1] 
+        # One-hot encode categorical features manually (ignoring target column)
+        # Will modify self.df and self.features
+        self.__one_hot_encode()
         
-        # Create a list of indices for all one-hot encoded columns
-        self.cat_column_indices = list(range(len(cont_cols), len(cont_cols) + len(cat_encoded.columns)))
+        self.num_features = self.features.shape[1]
 
-        # Combine normalized continuous and one-hot encoded categorical features
-        features = pd.concat([features[cont_cols], cat_encoded], axis=1)
-
-        # Update the features attribute
-        self.features = features
-        self.num_features = features.shape[1]
-
-    def __augment_minority(self, X, y):
+    def __print_info(self):
         """
-        Augment the minority class with randomized noise for each augmented record.
+        Print out information about the dataset, such as column names, data types,
+        and unique values for categorical columns.
+        """
+        print("[Dataset Info]: Dataset loaded and preprocessing completed.")
+        print(f"Columns in the dataset: {self.df.columns.tolist()}")
+        print(f"Target column: {self.target_column}")
+        print(f"Number of features (columns): {self.df.shape[1]}")
+        
+        # Print unique values per categorical column
+        for col in self.df.select_dtypes(include=["object", "category"]).columns:
+            unique_values = self.df[col].unique()
+            print(f"Column '{col}': {len(unique_values)} unique values")
+            print(f"Unique values: {unique_values}")
+
+    def __augment_minority(self, X, y, seed):
+        """
+        Augment the minority class using SMOTE (Synthetic Minority Oversampling Technique).
         Args:
             X (pd.DataFrame): Features.
             y (pd.Series): Target labels.
         Returns:
             X (pd.DataFrame), y (pd.Series): Augmented dataset.
         """
-        print("[Dataset Status]: Performing data augmentation on the minority class...")
+        print("[Dataset Status]: Performing data augmentation on the minority class using SMOTE...")
         
-        class_counts = y.value_counts()
-        max_count = class_counts.max()
+        # Convert DataFrame/Series to numpy arrays if necessary
+        is_dataframe = isinstance(X, pd.DataFrame)
+        X_array = X.values if is_dataframe else X
+        y_array = y.values if isinstance(y, pd.Series) else y
 
-        augmented_features = []
-        augmented_labels = []
+        # Apply SMOTE
+        smote = SMOTE(random_state=seed)
+        X_resampled, y_resampled = smote.fit_resample(X_array, y_array)
 
-        for label, count in class_counts.items():
-            if count < max_count:
-                diff = max_count - count
-                class_indices = y[y == label].index
-                
-                # Oversample from minority class
-                oversampled_indices = np.random.choice(class_indices, diff, replace=True)
-                
-                # Generate randomized noise for each record
-                for idx in oversampled_indices:
-                    record = X.loc[idx]  # Original record
-                    noise = np.random.normal(-0.05, 0.05, size=record.shape)  # Random noise
-                    augmented_features.append(record + noise)
-                    augmented_labels.append(label)
+        # Convert back to DataFrame/Series if input was in that format
+        if is_dataframe:
+            X_resampled = pd.DataFrame(X_resampled, columns=X.columns)
+        y_resampled = pd.Series(y_resampled, name=y.name)
+        
+        print("[Dataset Status]: Augmented dataset size: ", len(X_resampled), "Label ratio: ", sum(y_resampled)/len(y_resampled))
+        return X_resampled, y_resampled
 
-        # Append augmented data to original dataset
-        if augmented_features:
-            augmented_features = pd.DataFrame(augmented_features, columns=X.columns)
-            augmented_labels = pd.Series(augmented_labels, name=y.name)
-            X = pd.concat([X, augmented_features], axis=0, ignore_index=True)
-            y = pd.concat([y, augmented_labels], axis=0, ignore_index=True)
-
-        return X, y
-
-    def stratified_split(self, val_size=0.1, test_size=0.2, random_state=None):
+    def stratified_split(self, val_size=0.1, test_size=0.2, random_state=42):
         """
         Perform a stratified train-validation-test split.
 
@@ -182,7 +202,7 @@ class TabularDataset(Dataset):
 
         # Augment training set if needed
         if self.augment:
-            X_train, y_train = self.__augment_minority(X_train, y_train)
+            X_train, y_train = self.__augment_minority(X_train, y_train, random_state)
 
         # Convert to numpy arrays before passing to Dataset class
         train_dataset = TabularDatasetFromArrays(X_train.values, y_train.values, self.cat_column_indices)
@@ -271,6 +291,8 @@ if __name__ == "__main__":
         info=False  # Print dataset info
     )
 
+    print(dataset.cat_column_indices)
+    
     # Perform stratified split
     print("[Main]: Performing stratified train-val-test split...")
     train_set, val_set, test_set = dataset.stratified_split(
@@ -281,7 +303,7 @@ if __name__ == "__main__":
     print("[Main]: Checking samples from the training set...")
     for i in range(3):  # Check the first 5 samples
         X_sample, y_sample = train_set[i]
-        print(f"Sample {i}: Features: {X_sample[:8]}, Label: {y_sample}")
+        print(f"Sample {i}: Features: {X_sample[:20]}, Label: {y_sample}")
 
     # Check class distributions
     print("[Main]: Class distributions after split:")

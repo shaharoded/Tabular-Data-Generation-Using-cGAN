@@ -23,7 +23,7 @@ TEST_RATIO = 0.2    # Ratio out of the full dataset
 SEED = 42   # Change the seed and check influence on the model
 
 # Model Config
-DATA_DIM = 100 # The size of the feature vector
+DATA_DIM = 108 # The size of the feature vector
 NOISE_DIM = 32  # The size of the initial noise vector
 
 ## Generator Configuration
