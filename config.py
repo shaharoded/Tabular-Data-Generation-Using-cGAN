@@ -16,7 +16,7 @@ PRETRAIN_PATH = os.path.join(SAVE_PATH, 'best_model.pth')
 # Data Config:
 NUM_CLASSES = 2     # Number of classes in the dataset, for cGAN
 LABEL_RATIO = {0: 0.76, 1: 0.24}    # The ratio of the labels, manually derived from dataset, for generation purposes.
-APPLY_AUGMENTATION = False # Apply augmentation on minority classes when stratified split is called.
+APPLY_AUGMENTATION = True # Apply augmentation on minority classes when stratified split is called.
 BATCH_SIZE = 128
 VAL_RATIO = 0.0     # Ratio out of the training dataset
 TEST_RATIO = 0.2    # Ratio out of the full dataset
