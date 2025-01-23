@@ -235,7 +235,33 @@ class GAN(nn.Module):
 
         # Plot losses at the end of training
         self._plot_losses(gen_losses, disc_losses, best_epoch)
+        
+    def _post_processing(self, generated_data):
+        '''
+        Performs post process on the data, ensuring it fits an expected format 
+        based on the train dataset, for example, ensuring cat columns have only 1 True value.
+        A helper function to the generator to create better logits.
+        
+        Args:
+            generated_data: The output from self.generator(noise)
+        '''
+        # Post-process categorical columns
+        for group in self.cat_column_indices:
+            # Iterate over each group of categorical columns
+            for row in range(generated_data.size(0)):  # Iterate over rows
+                row_data = generated_data[row, group]  # Extract the group of columns for the current row
 
+                # Find the index of the max value in the row for this group
+                max_val_idx = row_data.argmax().item()  # Max value in the group for this row (get the scalar index)
+
+                # Map the relative index (within the group) to the global index in the full row
+                global_idx = group[max_val_idx]  # This gives the actual column index in the full row
+
+                # Set all values in the group to -1, then set the max value to 1
+                generated_data[row, group] = -1  # Set all values in this group to -1
+                generated_data[row, global_idx] = 1  # Mark the highest value as 1 in the global index
+        return generated_data
+        
     def _plot_losses(self, gen_losses, disc_losses, best_epoch=None):
         """
         Plot Generator and Discriminator losses on the same axis and highlight the best epoch.
@@ -296,20 +322,7 @@ class GAN(nn.Module):
             synthetic_data = self.generator(z)
         
         # Post-process categorical columns
-        for group in self.cat_column_indices:
-            # Iterate over each group of categorical columns
-            for row in range(synthetic_data.size(0)):  # Iterate over rows
-                row_data = synthetic_data[row, group]  # Extract the group of columns for the current row
-
-                # Find the index of the max value in the row for this group
-                max_val_idx = row_data.argmax().item()  # Max value in the group for this row (get the scalar index)
-
-                # Map the relative index (within the group) to the global index in the full row
-                global_idx = group[max_val_idx]  # This gives the actual column index in the full row
-
-                # Set all values in the group to -1, then set the max value to 1
-                synthetic_data[row, group] = -1  # Set all values in this group to -1
-                synthetic_data[row, global_idx] = 1  # Mark the highest value as 1 in the global index
+        synthetic_data = self._post_processing(synthetic_data)
         
         return synthetic_data
     
@@ -351,8 +364,8 @@ class cGAN(GAN):
             torch.Tensor, torch.Tensor, torch.Tensor: Outputs of generator and discriminator.
         """
         # Concatenate noise and labels for generator input
-        gen_input = torch.cat([z, labels], dim=1)
-        generated_data = self.generator(gen_input)
+        z = torch.cat([z, labels], dim=1)
+        generated_data = self.generator(z)
 
         if real_data is not None:
             # Concatenate labels with real and generated data for discriminator input
