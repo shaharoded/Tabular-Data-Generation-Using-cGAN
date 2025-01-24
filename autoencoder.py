@@ -187,6 +187,7 @@ if __name__ == "__main__":
         augment=APPLY_AUGMENTATION,
         info=False  # Print dataset info
     )
+    print(len(dataset))
     
     # Perform stratified split
     print("[Main]: Performing stratified train-val-test split...")
@@ -198,7 +199,7 @@ if __name__ == "__main__":
     val_loader = get_dataloader(val_set, batch_size=BATCH_SIZE, shuffle=False)
     test_loader = get_dataloader(test_set, batch_size=BATCH_SIZE, shuffle=False)
     
-        # Initialize Autoencoder
+    # Initialize Autoencoder
     print("[Main]: Initializing Autoencoder...")
     autoencoder = Autoencoder(
         encoder_config=ENCODER_CONFIG,
