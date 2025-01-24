@@ -14,6 +14,8 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 from config import *
 from dataset import *
 from nn_utils import build_network
+from autoencoder import Autoencoder
+
 
 class Generator(nn.Module):
     def __init__(self, config):
@@ -43,23 +45,27 @@ class Discriminator(nn.Module):
     def forward(self, x):
         return self.model(x)
     
-    
+
 class GAN(nn.Module):
-    def __init__(self, gen_config, disc_config, pretrained_path=None):
+    def __init__(self, gen_config, disc_config, autoencoder, pretrained_path=None):
         """
         Initialize the GAN with generator and discriminator architectures.
+        The Model recieves a trained AE object, so even the in pretrain loading, you need to first
+        load a pretrain AE object.
         
         Args:
             gen_config (list[dict]): Configuration for generator layers.
             disc_config (list[dict]): Configuration for discriminator layers.
+            autoencoder (AutoEncoder): A trained AE object with the correct dimentions.
             pretrained_path (str): Path to pretrained models directory.
         """
         super(GAN, self).__init__()
-        print('[Model Status]: Building Model...')
+        print(f'[Model Status]: Building {type(self)} Model...')
         self.generator = Generator(gen_config)
         self.discriminator = Discriminator(disc_config)
-        self.gen_config = gen_config
-        self.disc_config = disc_config
+        self.autoencoder = autoencoder
+        for param in self.autoencoder.parameters():  # Freeze encoder weights
+            param.requires_grad = False
         self.noise_dim = gen_config[0].get("input_dim") # Noise dimention is equal to the input
         self.cat_column_indices = []    # For generation function of cat values
         
@@ -149,12 +155,12 @@ class GAN(nn.Module):
         # Initialization update
         self.cat_column_indices = train_loader.cat_column_indices
         
-        # Loss function
-        criterion = nn.BCELoss()
+        # Loss function (best the classification nature of the problem)
+        criterion = nn.MSELoss()
 
         # Optimizers
-        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
-        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
+        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
+        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr/100, betas=(0.5, 0.999), weight_decay=weight_decay)
 
         # For early stopping
         architecture_loss = float("inf")
@@ -172,6 +178,10 @@ class GAN(nn.Module):
             for real_data, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data = real_data.to(device)
                 batch_size = real_data.size(0)
+                
+                # Encode real data into latent space
+                with torch.no_grad():
+                    real_data = self.autoencoder.encoder(real_data)  # Frozen encoder for real data
 
                 # Labels for real and fake data
                 real_labels = torch.ones(batch_size, 1).to(device)
@@ -301,6 +311,7 @@ class GAN(nn.Module):
             torch.Tensor: Generated samples.
         """
         self.generator.eval()
+        self.autoencoder.decoder.eval()
         
         # Raise an exception if labels are provided but the model is not cGAN
         if labels is not None:
@@ -318,19 +329,20 @@ class GAN(nn.Module):
         
         # Generate synthetic data
         with torch.no_grad():
-            synthetic_data = self.generator(z)
+            latent_data = self.generator(z)
+            synthetic_data = self.autoencoder.decoder(latent_data)
         
         # Post-process categorical columns
         synthetic_data = self._post_processing(synthetic_data)
         
         return synthetic_data
-    
 
+    
 class cGAN(GAN):
     '''
     A conditional GAN architecture inheriting from the original architecture for modularity.
     '''
-    def __init__(self, gen_config, disc_config, num_classes, pretrained_path=None):
+    def __init__(self, gen_config, disc_config, autoencoder, num_classes, pretrained_path=None):
         """
         Initialize the conditional GAN with generator and discriminator architectures.
         
@@ -344,7 +356,7 @@ class cGAN(GAN):
         gen_config[0]["input_dim"] += num_classes  # Adjust generator's input layer
         disc_config[0]["input_dim"] += num_classes  # Adjust discriminator's input layer
         
-        super(cGAN, self).__init__(gen_config, disc_config, pretrained_path)
+        super(cGAN, self).__init__(gen_config, disc_config, autoencoder, pretrained_path)
         self.num_classes = num_classes
         self.noise_dim = gen_config[0].get("input_dim") - num_classes  # Noise dimension without label
         if self.noise_dim <= 0:
@@ -384,10 +396,11 @@ class cGAN(GAN):
         # Initialization update
         self.cat_column_indices = train_loader.cat_column_indices
         
-        criterion = nn.BCELoss()
+        # Loss function (best for range [-1, 1])
+        criterion = nn.MSELoss()
 
-        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
-        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
+        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
+        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr/100, betas=(0.5, 0.999), weight_decay=weight_decay)
 
         architecture_loss = float("inf")
         best_epoch = 0
@@ -402,6 +415,10 @@ class cGAN(GAN):
             for real_data, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data, labels = real_data.to(device), labels.to(device)
                 batch_size = real_data.size(0)
+                
+                # Encode real data into latent space
+                with torch.no_grad():
+                    real_data = self.autoencoder.encoder(real_data)  # Frozen encoder for real data
 
                 # One-hot encode labels if not already
                 if labels.dim() == 1:
@@ -468,8 +485,7 @@ class cGAN(GAN):
                 continue
 
         self._plot_losses(gen_losses, disc_losses, best_epoch)
-    
-
+                
 if __name__ == "__main__":
     # Usage example    
     print("[Main]: Initializing dataset...")
@@ -487,11 +503,19 @@ if __name__ == "__main__":
     )
     print("[Main]: Creating Dataloader...")
     train_loader = get_dataloader(train_set, batch_size=BATCH_SIZE, shuffle=True)
-    
+
+    print("[Main]: Initializing Autoencoder...")
+    autoencoder = Autoencoder(
+        encoder_config=ENCODER_CONFIG,
+        decoder_config=DECODER_CONFIG,
+        pretrained_path=os.path.join(TRAINED_MODELS_DIR_PATH, 'ae', 'best_model_512.pth')
+    ).to(DEVICE)
+        
     if MODEL_NAME == 'gan':
         print("[Main]: Training a GAN model...")
         model = GAN(gen_config=GENERATOR_CONFIG,
                     disc_config=DISCRIMINATOR_CONFIG,
+                    autoencoder=autoencoder,
                     pretrained_path=PRETRAIN_PATH)
         
         model.train_model(train_loader=train_loader, 
@@ -514,6 +538,7 @@ if __name__ == "__main__":
         print("[Main]: Training a cGAN model...")
         model = cGAN(gen_config=GENERATOR_CONFIG,
                     disc_config=DISCRIMINATOR_CONFIG,
+                    autoencoder=autoencoder,
                     num_classes=NUM_CLASSES,
                     pretrained_path=PRETRAIN_PATH)
         
@@ -539,8 +564,3 @@ if __name__ == "__main__":
 
     print('Synthetic Data:')
     print(synthetic)
-    
-    
-    
-    
-    

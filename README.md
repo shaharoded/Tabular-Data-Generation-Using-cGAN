@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project aims to generate synthetic tabular data using Conditional Generative Adversarial Networks (cGAN). The approach utilizes both real and synthetic data to train models that can effectively mimic the distributions and relationships of features in the original dataset. The model is evaluated based on its ability to generate data with similar feature distributions and its performance in downstream tasks, such as detection and efficacy when used for training a Random Forest model.
+This project aims to generate synthetic tabular data using Conditional Generative Adversarial Networks (cGAN), with the option to use the GANs on top of a latent space encoded by the AutoEncoder. The approach utilizes both real and synthetic data to train models that can effectively mimic the distributions and relationships of features in the original dataset. The model is evaluated based on its ability to generate data with similar feature distributions and its performance in downstream tasks, such as detection and efficacy when used for training a Random Forest model.
 
 Unlike my other projects, this entire project is trainable on CPU.
 
@@ -19,6 +19,8 @@ Key highlights:
 - **`config.py`**: Defines model architecture, training parameters, and data handling settings. Includes optimal configurations from experiments.
 - **`dataset.py`**: Prepares the dataset by splitting it into training, validation, and test sets. Handles preprocessing such as one-hot encoding and normalization.
 - **`gan.py`**: Implements the GAN and cGAN models for data generation.
+- **`ae_gan.py`**: Implements the GAN and cGAN models with the integration of a trained AE model for data generation.
+- **`autoencoder.py`**: Implements the AutoEncoder model to represent the data in the latent space.
 - **`Analysis.ipynb`**: A notebook for analyzing the quality of the generated data, including correlation differences and feature distributions.
 - **`requirements.txt`**: Lists dependencies for running the project.
 - **`report.pdf`**: Detailed documentation (in Hebrew) outlining project decisions and experiments.
@@ -50,13 +52,19 @@ pip install -r requirements.txt
 
 Training process offers an early stopping depending on the Generator's loss and tracking over both part's performance:
 
-![loss](./Images/cGAN_loss_512.png)
+![cGAN_loss](./Images/cGAN_loss_512.png)
+
+- **AutoEncoder**: An Auto Encoder model is offered in order to represent the data in a lower latent dimention before training the GAN, which should ease of the generator learning the representation, especially given the large number of categorical columns that needs representation.
+
+- **Post Processing**: Both modules are equiped with a post processing method designated at turning the data to pute categorical when needed.
+
+![AE_loss](./Images/AE_loss.png)
   
 - **Data Preprocessing**: 
   - One-hot encoding for categorical features to avoid any ordering in the categorical data.
   - Normalization of numerical features to standardize their range and prevent any scale issues.
 
-- **Detection Metric**: A Random Forest model is trained on a combined dataset consisting of both real and synthetic data. The model is evaluated on its ability to detect whether a given data point is real or synthetic, with a low AUC indicating that the synthetic data is close to the real data.
+- **Detection Metric**: A Random Forest model is trained on a combined dataset consisting of both real and synthetic data. The model is evaluated on its ability to detect whether a given data point is real or synthetic, with a low AUC indicating that the synthetic data is close to the real data. The Analysis also offers feature importance using a tree method, to examine the failure points of the model.
 
 - **Efficacy Metric**: The model evaluates whether synthetic data can replace real data in training a model. The efficacy is measured as the ratio of the AUC score of a Random Forest model trained on synthetic data to the AUC score of a model trained on real data.
 
@@ -70,14 +78,14 @@ Training process offers an early stopping depending on the Generator's loss and 
 
 ## Results
 
-The current implementation showed bad results, sufferring from difficulties in handeling the categorical data (one-hot encoded) properly. Improved implementation for this use case was not yet designed. Attached are the current results:
+The current implementation showed bad results, sufferring from difficulties in handeling the categorical data (one-hot encoded) properly. The better implementation was the one without the AutoEncoder. Improved implementation for this use case was not yet designed. Attached are the current results:
 
 ### Detection Metric
 
 The detection metric evaluates how similar the synthetic data is to the real data. A low AUC score in this case is desirable, indicating that the model cannot distinguish between real and synthetic data. A high similarity between the real and synthetic data means that the model is unable to tell the difference between the two.
 
 ```
-Average AUC for detection (cGAN): 1.0000
+Average AUC for detection (cGAN): 1.0000 -> BAD!
 ```
 
 ### Efficacy Metric
@@ -85,7 +93,7 @@ Average AUC for detection (cGAN): 1.0000
 The efficacy metric evaluates whether synthetic data can serve as a useful substitute for real data in training models. The efficacy is computed as the ratio of the AUC score for synthetic data to the AUC score for real data, with 1 being the ideal score. A higher ratio suggests that the synthetic data is of high quality and can effectively replace real data.
 
 ```
-Average AUC for efficacy (cGAN): 0.63
+Average AUC for efficacy (cGAN): 0.64
 ```
 
 ### Feature Distribution Comparison
@@ -100,7 +108,7 @@ The plots show histograms of features from both real and synthetic datasets. Ide
 
 Another critical evaluation metric is the correlation between features. The heatmap below illustrates the difference in correlations between the real and synthetic data, highlighting any discrepancies in feature relationships.
 
-![Correlation Heatmap](./Images/cGAN_corr.png)
+![Correlation Heatmap](./Images/GAN_corr.png)
 
 The closer the correlation difference is to zero, the better the synthetic data mimics the real data in terms of feature interrelationships.
 
