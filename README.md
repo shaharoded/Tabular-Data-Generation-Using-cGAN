@@ -16,10 +16,11 @@ Key highlights:
 ## Project Structure
 
 ### Key Files
-- **`config.py`**: Defines model architecture, training parameters, and data handling settings. Includes optimal configurations from experiments.
+- **`config.py`**: Defines model architecture, training parameters, and data handling settings. Includes optimal configurations from latest experiments. The attached report also contain the optimal configurations for initial model (eg., regular GAN, cGAN, before AE).
 - **`dataset.py`**: Prepares the dataset by splitting it into training, validation, and test sets. Handles preprocessing such as one-hot encoding and normalization.
 - **`gan.py`**: Implements the GAN and cGAN models for data generation.
 - **`ae_gan.py`**: Implements the GAN and cGAN models with the integration of a trained AE model for data generation.
+- **`ae_wgan.py`**: Implements the WGAN and WcGAN models with the integration of a trained AE model for data generation.
 - **`autoencoder.py`**: Implements the AutoEncoder model to represent the data in the latent space.
 - **`Analysis.ipynb`**: A notebook for analyzing the quality of the generated data, including correlation differences and feature distributions.
 - **`requirements.txt`**: Lists dependencies for running the project.
@@ -49,6 +50,7 @@ pip install -r requirements.txt
 ## Features
 
 - **GAN and Conditional GAN (cGAN)**: The project utilizes both a Generative Adversarial Network (GAN) and a Conditional Generative Adversarial Network (cGAN) to generate synthetic tabular data. The cGAN is conditioned on class labels, ensuring that the generated data matches the feature distribution of each class in the original dataset.
+Both concept models are implemented in several architectures - Base architecture, AE latent architecture and AE latent architecture with the implementation of Wasserstein loss effectively turning it to a WGAN (and WcGAN) model.
 
 Training process offers an early stopping depending on the Generator's loss and tracking over both part's performance:
 
@@ -78,7 +80,7 @@ Training process offers an early stopping depending on the Generator's loss and 
 
 ## Results
 
-The current implementation showed bad results, sufferring from difficulties in handeling the categorical data (one-hot encoded) properly. The better implementation was the one without the AutoEncoder. Improved implementation for this use case was not yet designed. Attached are the current results:
+The current implementation showed bad results, sufferring from difficulties in handeling the categorical data (one-hot encoded) properly. Currently, `gan.py` models performed better than `ae_gan.py` models. The `ae_wgan.py` models were not yet properly optimized and their results were not yet tested. Until proper optimization based on the Generator and Critique losses, this implementation is considered incomplete. Attached are the current results from the `gan.py` module:
 
 ### Detection Metric
 
