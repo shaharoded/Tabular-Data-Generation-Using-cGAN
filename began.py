@@ -148,7 +148,7 @@ class BEGAN(nn.Module):
         return generated_data
        
     
-    def train_model(self, train_loader, epochs, warm_up, lr, device, early_stop=5, save_path=None):
+    def train_model(self, train_loader, epochs, warm_up, lr, weight_decay, device, early_stop=5, save_path=None):
         """
         Train the BEGAN model.
         Best model weights are saved, and the improvement is decided by Generator loss.
@@ -159,6 +159,7 @@ class BEGAN(nn.Module):
             epochs (int): Number of epochs to train.
             warm_up (int): Number of warm-up epochs which will not count toward early stopping.
             lr (float): Learning rate.
+            weight_decay (float): W2 penalty, added only to critic to slow it down.
             device (torch.device): Device to train on.
             early_stop (int, optional): Early stopping patience. Defaults to 5.
             save_path (str): Full path where to save the model weights, which is identical to pretrained_path.
@@ -168,8 +169,12 @@ class BEGAN(nn.Module):
         
         # Optimizers
         optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
-        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr/2, betas=(0.5, 0.999))
-
+        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr/2, betas=(0.5, 0.999), weight_decay=weight_decay)
+        
+        # Schedulers - exponential decay with small gamma
+        scheduler_gen = optim.lr_scheduler.ExponentialLR(optim_gen, gamma=0.995)
+        scheduler_critic = optim.lr_scheduler.ExponentialLR(optim_critic, gamma=0.995)
+        
         # Early stopping variables
         best_loss = float("inf")
         stop_counter = 0
@@ -222,7 +227,7 @@ class BEGAN(nn.Module):
                 # Train generator
                 corr_loss = correlation_loss(real_data, fake_data_gen) # Calculate correlation loss
                 recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
-                generator_loss = recon_loss + self.lambda_corr * corr_loss
+                generator_loss = recon_loss + (self.lambda_corr * (1 - self.k_t)) * corr_loss   # Increase corr loss when k_t is small
                 generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
                 torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_gen.step()
@@ -234,9 +239,15 @@ class BEGAN(nn.Module):
                 gen_loss_epoch += generator_loss.item()
                 crit_loss_epoch += critic_loss.item()
 
-            # Rest of the code remains the same
-            gen_losses.append(gen_loss_epoch / len(train_loader))
-            crit_losses.append(crit_loss_epoch / len(train_loader))
+            # Step the schedulers at the end of each epoch
+            scheduler_gen.step()
+            scheduler_critic.step()
+            
+            # Log the losses
+            gen_loss_epoch /= len(train_loader)
+            crit_loss_epoch /= len(train_loader)
+            gen_losses.append(gen_loss_epoch)
+            crit_losses.append(crit_loss_epoch)
             k_values.append(self.k_t)
 
             print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
@@ -406,15 +417,19 @@ class cBEGAN(BEGAN):
         generated_data = self.decoder(latent_space)
         return generated_data
 
-    def train_model(self, train_loader, epochs, warm_up, lr, device, early_stop=5, save_path=None):
+    def train_model(self, train_loader, epochs, warm_up, lr, weight_decay, device, early_stop=5, save_path=None):
         """
         Train the conditional BEGAN model, with the addition of the labels.
         """
         self.cat_column_indices = train_loader.cat_column_indices
         
         optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
-        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr/2, betas=(0.5, 0.999))
+        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr/2, betas=(0.5, 0.999), weight_decay=weight_decay)
 
+        # Schedulers - exponential decay with small gamma
+        scheduler_gen = optim.lr_scheduler.ExponentialLR(optim_gen, gamma=0.995)
+        scheduler_critic = optim.lr_scheduler.ExponentialLR(optim_critic, gamma=0.995)
+        
         best_loss = float("inf")
         stop_counter = 0
         best_epoch = 0
@@ -469,7 +484,7 @@ class cBEGAN(BEGAN):
                 # Train generator
                 corr_loss = correlation_loss(real_data, fake_data_gen) # Calculate correlation loss
                 recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
-                generator_loss = recon_loss + self.lambda_corr * corr_loss
+                generator_loss = recon_loss + (self.lambda_corr * (1 - self.k_t)) * corr_loss   # Increase corr loss when k_t is small
                 generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
                 torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_gen.step()
@@ -480,9 +495,16 @@ class cBEGAN(BEGAN):
 
                 gen_loss_epoch += generator_loss.item()
                 crit_loss_epoch += critic_loss.item()
-
-            gen_losses.append(gen_loss_epoch / len(train_loader))
-            crit_losses.append(crit_loss_epoch / len(train_loader))
+            
+            # Step the schedulers at the end of each epoch
+            scheduler_gen.step()
+            scheduler_critic.step()
+            
+            # Log the losses
+            gen_loss_epoch /= len(train_loader)
+            crit_loss_epoch /= len(train_loader)
+            gen_losses.append(gen_loss_epoch)
+            crit_losses.append(crit_loss_epoch)
             k_values.append(self.k_t)
 
             print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
@@ -540,6 +562,7 @@ if __name__ == "__main__":
             epochs=EPOCHS,
             warm_up=WARMUP_EPOCHS, 
             lr=BASE_LEARNING_RATE, 
+            weight_decay = WEIGHT_DECAY,
             device=DEVICE, 
             early_stop=GAN_EARLY_STOP,
             save_path=PRETRAIN_PATH
@@ -566,6 +589,7 @@ if __name__ == "__main__":
             epochs=EPOCHS,
             warm_up=WARMUP_EPOCHS, 
             lr=BASE_LEARNING_RATE, 
+            weight_decay = WEIGHT_DECAY,
             device=DEVICE, 
             early_stop=GAN_EARLY_STOP,
             save_path=PRETRAIN_PATH)
