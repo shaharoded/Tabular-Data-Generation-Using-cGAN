@@ -43,16 +43,6 @@ DISCRIMINATOR_CONFIG = [
     {"input_dim": 8, "output_dim": 1, "activation": nn.Sigmoid(), "dropout": 0.0},  # No dropout on the output layer
 ]
 
-# Critic config for WGAN
-CRITIC_CONFIG = [
-    {"input_dim": LATENT_DIM, "output_dim": 512, "activation": nn.LeakyReLU(0.2), "norm": "layer", "dropout": 0.3},
-    {"input_dim": 512, "output_dim": 256, "activation": nn.LeakyReLU(0.2), "norm": "layer", "dropout": 0.3},
-    {"input_dim": 256, "output_dim": 128, "activation": nn.LeakyReLU(0.2), "norm": "layer", "dropout": 0.2},
-    {"input_dim": 128, "output_dim": 64, "activation": nn.LeakyReLU(0.2), "norm": "layer", "dropout": 0.1},
-    {"input_dim": 64, "output_dim": 32, "activation": nn.LeakyReLU(0.2), "norm": "layer", "dropout": 0.0},
-    {"input_dim": 32, "output_dim": 1, "activation": None, "dropout": 0.0},
-]
-
 # Encoder Configuration
 ENCODER_CONFIG = [
     {"input_dim": DATA_DIM, "output_dim": 512, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
@@ -78,10 +68,10 @@ DECODER_CONFIG = [
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BASE_LEARNING_RATE = 2e-4    
 WEIGHT_DECAY = 1e-4
-LAMBDA_GP = 10.0    # Gradient penalty weight, for WGAN.
+LAMBDA_K = 5e-3     # Learning rate for `k_t` balance term, for BEGAN.
+GAMMA = 0.85        # BEGAN balance factor
 GAN_EARLY_STOP = 25     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
 AE_EARLY_STOP = 5     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
 WARMUP_EPOCHS = 50  # Define a number of GAN warmup iterations in which the model won't count towards an early stop.
 EPOCHS = 500    #   A high number of epochs, hoping for an early stopping 
 GENERATOR_UPDATE_FREQ = 1   # Number of G updates per D updates, to balance their losses.
-CRITIC_UPDATE_FREQ = 5   # Number of C updates per G updates in the WGAN, to balance their losses.

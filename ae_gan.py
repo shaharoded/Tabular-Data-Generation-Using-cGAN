@@ -51,7 +51,9 @@ class GAN(nn.Module):
         """
         Initialize the GAN with generator and discriminator architectures.
         The Model recieves a trained AE object, so even the in pretrain loading, you need to first
-        load a pretrain AE object.
+        you must load a pretrained AE object.
+        The idea of this version is to ease on the representaion needed from the Generator
+        by first converting the data to a smaller latent space.
         
         Args:
             gen_config (list[dict]): Configuration for generator layers.
@@ -170,10 +172,10 @@ class GAN(nn.Module):
         # Track losses for plotting
         gen_losses = []
         disc_losses = []
-
+        
+        self.train()
         for epoch in range(epochs):
             gen_loss_epoch, disc_loss_epoch = 0, 0
-            self.train()
 
             for real_data, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data = real_data.to(device)
@@ -408,9 +410,9 @@ class cGAN(GAN):
 
         gen_losses, disc_losses = [], []
 
+        self.train()
         for epoch in range(epochs):
             gen_loss_epoch, disc_loss_epoch = 0, 0
-            self.train()
 
             for real_data, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data, labels = real_data.to(device), labels.to(device)

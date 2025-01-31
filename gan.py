@@ -164,10 +164,10 @@ class GAN(nn.Module):
         # Track losses for plotting
         gen_losses = []
         disc_losses = []
-
+        self.train()
+        
         for epoch in range(epochs):
             gen_loss_epoch, disc_loss_epoch = 0, 0
-            self.train()
 
             for real_data, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data = real_data.to(device)
@@ -394,10 +394,10 @@ class cGAN(GAN):
         stop_counter = 0
 
         gen_losses, disc_losses = [], []
-
+        self.train()
+        
         for epoch in range(epochs):
             gen_loss_epoch, disc_loss_epoch = 0, 0
-            self.train()
 
             for real_data, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data, labels = real_data.to(device), labels.to(device)
