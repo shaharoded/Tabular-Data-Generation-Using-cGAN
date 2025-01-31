@@ -20,7 +20,7 @@ Key highlights:
 - **`dataset.py`**: Prepares the dataset by splitting it into training, validation, and test sets. Handles preprocessing such as one-hot encoding and normalization.
 - **`gan.py`**: Implements the GAN and cGAN models for data generation.
 - **`ae_gan.py`**: Implements the GAN and cGAN models with the integration of a trained AE model for data generation.
-- **`began.py`**: Implements the BEGAN and cBEGAN models integrated with a pretrained AE model.
+- **`began.py`**: Implements the BEGAN and cBEGAN models integrated with a pretrained AE model, finetuned as a critic discriminator of the GAN.
 - **`autoencoder.py`**: Implements the AutoEncoder model to represent the data in the latent space.
 - **`Analysis.ipynb`**: A notebook for analyzing the quality of the generated data, including correlation differences and feature distributions.
 - **`requirements.txt`**: Lists dependencies for running the project.
