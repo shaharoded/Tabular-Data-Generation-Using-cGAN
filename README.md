@@ -50,7 +50,7 @@ pip install -r requirements.txt
 ## Features
 
 - **GAN and Conditional GAN (cGAN)**: The project utilizes both a Generative Adversarial Network (GAN) and a Conditional Generative Adversarial Network (cGAN) to generate synthetic tabular data. The cGAN is conditioned on class labels, ensuring that the generated data matches the feature distribution of each class in the original dataset.
-Both concept models are implemented in several architectures - vanilla architecture, AE infused architecture and BEGAN.
+Both concept models are implemented in several architectures - vanilla architecture, AE infused architecture and BEGAN (added with correlation loss).
 
 Training process offers an early stopping depending on the Generator's loss and tracking over both part's performance:
 

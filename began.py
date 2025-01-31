@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.utils as torch_utils
 import torch.optim as optim
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -13,7 +14,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 # Local Code
 from config import *
 from dataset import *
-from nn_utils import build_network
+from nn_utils import build_network, correlation_loss
 from autoencoder import Autoencoder
 
 
@@ -33,7 +34,7 @@ class Generator(nn.Module):
     
 
 class BEGAN(nn.Module):
-    def __init__(self, gen_config, pretrained_autoencoder, pretrained_path=None, gamma=0.75, lambda_k=0.001):
+    def __init__(self, gen_config, pretrained_autoencoder, pretrained_path=None, gamma=0.75, lambda_corr=0.1, lambda_k=0.001):
         """
         Initialize the BEGAN with generator and an autoencoder critic.
         A trained AE is inputed for manipulation on original data, and it's decoder is used as
@@ -44,6 +45,7 @@ class BEGAN(nn.Module):
             pretrained_path (str): Path to pretrained models directory.
             gamma (float): BEGAN balance factor (default: 0.75).
             lambda_k (float): Learning rate for `k_t` balance term (default: 0.001).
+            lambda_corr (float): Learning rate for `corr_loss` term (default: 0.1).
         """
         super(BEGAN, self).__init__()
         print(f'[Model Status]: Building {type(self)} Model...')
@@ -56,6 +58,7 @@ class BEGAN(nn.Module):
         self.cat_column_indices = []    # For generation function of cat values
         self.gamma = gamma
         self.lambda_k = lambda_k
+        self.lambda_corr = lambda_corr
         self.k_t = 0.0  # Balance variable
 
         if pretrained_path:
@@ -149,6 +152,7 @@ class BEGAN(nn.Module):
         """
         Train the BEGAN model.
         Best model weights are saved, and the improvement is decided by Generator loss.
+        Adds correlation difference between real and fake data as loss term to the generator.
         
         Args:
             train_loader (DataLoader): DataLoader for training data.
@@ -203,6 +207,7 @@ class BEGAN(nn.Module):
 
                 critic_loss = real_loss - self.k_t * fake_loss
                 critic_loss.backward(retain_graph=True)  # Add retain_graph=True here
+                torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_critic.step()
                 
                 # === Generator Step ===
@@ -215,8 +220,11 @@ class BEGAN(nn.Module):
                 fake_reconstructed_gen = self.decoder(fake_latent_gen)
 
                 # Train generator
-                generator_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
+                corr_loss = correlation_loss(real_data, fake_data_gen) # Calculate correlation loss
+                recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
+                generator_loss = recon_loss + self.lambda_corr * corr_loss
                 generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
+                torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_gen.step()
 
                 # Update k_t
@@ -231,7 +239,8 @@ class BEGAN(nn.Module):
             crit_losses.append(crit_loss_epoch / len(train_loader))
             k_values.append(self.k_t)
 
-            print(f"[Training Status]: Epoch {epoch+1}: Generator Loss: {gen_loss_epoch:.4f}, Critic Loss: {crit_loss_epoch:.4f}, k_t: {self.k_t:.4f}")
+            print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
+                  f"C Loss: {crit_loss_epoch:.4f}, Corr Loss: {corr_loss.item():.4f}, k_t: {self.k_t:.4f}")
 
             if gen_loss_epoch < best_loss and epoch >= warm_up:
                 best_loss = gen_loss_epoch
@@ -358,7 +367,7 @@ class cBEGAN(BEGAN):
     A conditional BEGAN architecture inheriting from the original BEGAN
     for modularity.
     '''
-    def __init__(self, gen_config, pretrained_autoencoder, num_classes, pretrained_path=None, gamma=0.75, lambda_k=0.001):
+    def __init__(self, gen_config, pretrained_autoencoder, num_classes, pretrained_path=None, gamma=0.75, lambda_corr=0.1, lambda_k=0.001):
         """
         Initialize the conditional BEGAN with generator and autoencoder critic.
         
@@ -368,12 +377,13 @@ class cBEGAN(BEGAN):
             num_classes (int): Dimension of the one-hot encoded labels.
             pretrained_path (str): Path to pretrained models directory.
             gamma (float): BEGAN balance factor (default: 0.75).
+            lambda_corr (float): Learning rate for `corr_loss` term (default: 0.1).
             lambda_k (float): Learning rate for k_t balance term (default: 0.001).
         """
         # Dynamically adjust input dimensions for conditional input
         gen_config[0]["input_dim"] += num_classes  # Adjust generator's input layer
         
-        super(cBEGAN, self).__init__(gen_config, pretrained_autoencoder, pretrained_path, gamma, lambda_k)
+        super(cBEGAN, self).__init__(gen_config, pretrained_autoencoder, pretrained_path, gamma, lambda_corr, lambda_k)
         self.num_classes = num_classes
         self.noise_dim = gen_config[0].get("input_dim") - num_classes  # Noise dimension without label
         if self.noise_dim <= 0:
@@ -398,7 +408,7 @@ class cBEGAN(BEGAN):
 
     def train_model(self, train_loader, epochs, warm_up, lr, device, early_stop=5, save_path=None):
         """
-        Train the conditional BEGAN model.
+        Train the conditional BEGAN model, with the addition of the labels.
         """
         self.cat_column_indices = train_loader.cat_column_indices
         
@@ -443,6 +453,7 @@ class cBEGAN(BEGAN):
 
                 critic_loss = real_loss - self.k_t * fake_loss
                 critic_loss.backward(retain_graph=True)
+                torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_critic.step()
                 
                 # === Generator Step ===
@@ -454,9 +465,13 @@ class cBEGAN(BEGAN):
                 fake_latent_gen = self.generator(z)
                 fake_data_gen = self.decoder(fake_latent_gen)
                 fake_reconstructed_gen = self.decoder(fake_latent_gen)
-
-                generator_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
-                generator_loss.backward()
+                
+                # Train generator
+                corr_loss = correlation_loss(real_data, fake_data_gen) # Calculate correlation loss
+                recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
+                generator_loss = recon_loss + self.lambda_corr * corr_loss
+                generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
+                torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_gen.step()
 
                 # Update k_t
@@ -470,8 +485,8 @@ class cBEGAN(BEGAN):
             crit_losses.append(crit_loss_epoch / len(train_loader))
             k_values.append(self.k_t)
 
-            print(f"[Training Status]: Epoch {epoch+1}: Generator Loss: {gen_loss_epoch:.4f}, "
-                  f"Critic Loss: {crit_loss_epoch:.4f}, k_t: {self.k_t:.4f}")
+            print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
+                  f"C Loss: {crit_loss_epoch:.4f}, Corr Loss: {corr_loss.item():.4f}, k_t: {self.k_t:.4f}")
 
             if gen_loss_epoch < best_loss and epoch >= warm_up:
                 best_loss = gen_loss_epoch

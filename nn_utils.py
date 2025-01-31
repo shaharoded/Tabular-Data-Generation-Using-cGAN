@@ -1,4 +1,5 @@
 
+import torch
 import torch.nn as nn
 
 
@@ -38,3 +39,44 @@ def build_network(config):
             layers.append(nn.Dropout(layer["dropout"]))
 
     return nn.Sequential(*layers)
+
+
+def correlation_loss(real_data, fake_data):
+    '''
+    Calculates a penalty on the generator loss if the real data and fake data 
+    does not share the same correlations.
+    
+        The function computes the Pearson correlation matrices of the real and fake datasets
+    and penalizes the generator based on the absolute difference between them.
+    
+    Args:
+        real_data (torch.Tensor): A tensor of real data samples, shape `(batch_size, num_features)`.
+        fake_data (torch.Tensor): A tensor of fake (generated) data samples, shape `(batch_size, num_features)`.
+    
+    Returns:
+        torch.Tensor: A scalar tensor representing the mean absolute difference 
+                      between the correlation matrices of real and fake data.
+    '''
+        # Calculate means and standard deviations
+    real_mean = torch.mean(real_data, dim=0)
+    fake_mean = torch.mean(fake_data, dim=0)
+    
+    real_std = torch.std(real_data, dim=0) + 1e-6  # Add small epsilon to avoid division by zero
+    fake_std = torch.std(fake_data, dim=0) + 1e-6
+    
+    # Center and normalize the data
+    real_normalized = (real_data - real_mean) / real_std
+    fake_normalized = (fake_data - fake_mean) / fake_std
+    
+    # Calculate correlation matrices manually
+    real_corr = torch.matmul(real_normalized.T, real_normalized) / (real_data.size(0) - 1)
+    fake_corr = torch.matmul(fake_normalized.T, fake_normalized) / (fake_data.size(0) - 1)
+    
+    # Replace NaN values with 1 using masks
+    real_corr = torch.where(torch.isnan(real_corr), torch.ones_like(real_corr), real_corr)
+    fake_corr = torch.where(torch.isnan(fake_corr), torch.ones_like(fake_corr), fake_corr)
+    
+    # Calculate absolute difference
+    corr_diff = torch.abs(real_corr - fake_corr)
+    
+    return torch.mean(corr_diff)
