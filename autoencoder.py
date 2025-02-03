@@ -204,7 +204,7 @@ if __name__ == "__main__":
     autoencoder = Autoencoder(
         encoder_config=ENCODER_CONFIG,
         decoder_config=DECODER_CONFIG,
-        pretrained_path=PRETRAIN_PATH  # Load pretrained weights if they exist
+        pretrained_path=os.path.join(TRAINED_MODELS_DIR_PATH, 'ae', 'best_model.pth')  # Load pretrained weights if they exist
     ).to(DEVICE)
 
     # Train the Autoencoder
@@ -216,7 +216,7 @@ if __name__ == "__main__":
         lr=BASE_LEARNING_RATE,
         device=DEVICE,
         early_stop=AE_EARLY_STOP,
-        save_path=PRETRAIN_PATH
+        save_path=os.path.join(TRAINED_MODELS_DIR_PATH, 'ae', 'best_model.pth')  # Load pretrained weights if they exist
     )
 
     print("[Main]: Evaluating Autoencoder...")

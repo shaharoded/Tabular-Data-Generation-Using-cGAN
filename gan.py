@@ -76,16 +76,25 @@ class GAN(nn.Module):
     def __load_weights(self, pretrained_path):
         """
         Load weights from a pre-trained model checkpoint.
-
-        Args:
-            pretrained_path (str): Path to the pre-trained model checkpoint.
         """
         if os.path.isfile(pretrained_path):
             print(f"[Model Status]: Loading weights from {pretrained_path}")
-            checkpoint = torch.load(pretrained_path, weights_only=True)
-            self.generator.load_state_dict(checkpoint['generator_state_dict'])
-            self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
-            self.cat_column_indices = checkpoint.get('cat_column_indices',[])
+            try:
+                # Try loading without weights_only first
+                checkpoint = torch.load(pretrained_path, weights_only=True)
+                
+                if isinstance(checkpoint, dict) and 'generator_state_dict' in checkpoint:
+                    self.generator.load_state_dict(checkpoint['generator_state_dict'])
+                    self.discriminator.load_state_dict(checkpoint['discriminator_state_dict'])
+                    self.cat_column_indices = checkpoint.get('cat_column_indices', [])
+                    print("[Model Status]: Successfully loaded model weights")
+                else:
+                    raise ValueError("Checkpoint does not contain expected keys")
+                    
+            except Exception as e:
+                print(f"[Model Status]: Error loading checkpoint: {str(e)}")
+                print("[Model Status]: Starting from scratch...")
+                
         else:
             print(f"[Model Status]: Pre-trained model not found at {pretrained_path}, starting from scratch.")
             
@@ -147,25 +156,25 @@ class GAN(nn.Module):
         self.cat_column_indices = train_loader.cat_column_indices
         
         # Loss functions
-        criterion = nn.BCELoss()
+        criterion = nn.BCELoss(reduction='mean')
         
         # Optimizers
         optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
-        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr/10, betas=(0.5, 0.999), weight_decay=weight_decay)
+        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr/4, betas=(0.5, 0.999), weight_decay=weight_decay)
         
         # Learning rate schedulers
         scheduler_gen = optim.lr_scheduler.OneCycleLR(
             optim_gen,
             max_lr=lr,
             epochs=epochs,
-            steps_per_epoch=len(train_loader),
+            steps_per_epoch=len(train_loader) * gen_update_freq,
             pct_start=0.3,  # Warm-up phase
             anneal_strategy='cos'
         )
         
         scheduler_disc = optim.lr_scheduler.OneCycleLR(
             optim_disc,
-            max_lr=lr,
+            max_lr=lr/2,
             epochs=epochs,
             steps_per_epoch=len(train_loader),
             pct_start=0.3,
@@ -189,8 +198,8 @@ class GAN(nn.Module):
                 batch_size = real_data.size(0)
                 
                 # Labels
-                real_labels = torch.ones(batch_size, 1).to(device)
-                fake_labels = torch.zeros(batch_size, 1).to(device)
+                real_labels = torch.full((batch_size, 1), 0.9, device=device)
+                fake_labels = torch.full((batch_size, 1), 0.1, device=device)
                 
                 # Train Discriminator
                 z = torch.randn(batch_size, self.noise_dim).to(device)
@@ -201,7 +210,7 @@ class GAN(nn.Module):
                 
                 loss_real = criterion(real_output, real_labels)
                 loss_fake = criterion(fake_output, fake_labels)
-                disc_loss = loss_real + loss_fake
+                disc_loss = (loss_real + loss_fake)/2 # Aspire to log(2) loss.
                 
                 optim_disc.zero_grad()
                 disc_loss.backward()
@@ -220,7 +229,7 @@ class GAN(nn.Module):
                     # Combine adversarial and correlation losses
                     gen_adv_loss = criterion(fake_output, real_labels)
                     corr_loss = correlation_loss(real_data, fake_data)
-                    gen_loss = gen_adv_loss + self.lambda_corr * corr_loss  # Weighted combination
+                    gen_loss = gen_adv_loss + self.lambda_corr * corr_loss # Weighted combination
                     
                     optim_gen.zero_grad()
                     gen_loss.backward()
@@ -369,7 +378,7 @@ class cGAN(GAN):
         gen_config[0]["input_dim"] += num_classes  # Adjust generator's input layer
         disc_config[0]["input_dim"] += num_classes  # Adjust discriminator's input layer
         
-        super(cGAN, self).__init__(gen_config, disc_config, pretrained_path)
+        super(cGAN, self).__init__(gen_config, disc_config, pretrained_path, lambda_corr)
         self.num_classes = num_classes
         self.noise_dim = gen_config[0].get("input_dim") - num_classes  # Noise dimension without label
         if self.noise_dim <= 0:
@@ -404,81 +413,117 @@ class cGAN(GAN):
 
     def train_model(self, train_loader, epochs, warm_up, lr, weight_decay, device, early_stop=5, gen_update_freq=5, save_path=None):
         """
-        Train the conditional GAN with one-hot encoded labels.
+        Enhanced conditional GAN training with improved training techniques.
         """
-        # Initialization update
         self.cat_column_indices = train_loader.cat_column_indices
         
-        criterion = nn.BCELoss()
-
-        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
-        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
-
+        # Loss functions with mean reduction
+        criterion = nn.BCELoss(reduction='mean')
+        
+        # Optimizers with different learning rates
+        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
+        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr/4, betas=(0.5, 0.999), weight_decay=weight_decay)
+        
+        # Learning rate schedulers
+        scheduler_gen = optim.lr_scheduler.OneCycleLR(
+            optim_gen,
+            max_lr=lr,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader) * gen_update_freq,
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
+        
+        scheduler_disc = optim.lr_scheduler.OneCycleLR(
+            optim_disc,
+            max_lr=lr/4,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
+        
+        # For early stopping
         architecture_loss = float("inf")
         best_epoch = 0
         stop_counter = 0
-
-        gen_losses, disc_losses = [], []
+        
+        # Track losses
+        gen_losses, disc_losses, corr_losses = [], [], []
         self.train()
         
         for epoch in range(epochs):
-            gen_loss_epoch, disc_loss_epoch = 0, 0
-
+            gen_loss_epoch, disc_loss_epoch, corr_loss_epoch = 0, 0, 0
+            
             for real_data, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data, labels = real_data.to(device), labels.to(device)
                 batch_size = real_data.size(0)
-
+                
                 # One-hot encode labels if not already
                 if labels.dim() == 1:
                     labels = F.one_hot(labels, num_classes=self.num_classes).float()
-
-                real_labels = torch.ones(batch_size, 1).to(device)
-                fake_labels = torch.zeros(batch_size, 1).to(device)
-
-                # Train Discriminator (z = z + labels)
+                
+                # Labels with smoothing
+                real_labels = torch.full((batch_size, 1), 0.9, device=device)
+                fake_labels = torch.full((batch_size, 1), 0.1, device=device)
+                
+                # Train Discriminator
                 z = torch.cat([torch.randn(batch_size, self.noise_dim).to(device), labels], dim=1)
                 fake_data = self.generator(z)
-
+                
                 disc_real_input = torch.cat([real_data, labels], dim=1)
                 disc_fake_input = torch.cat([fake_data.detach(), labels], dim=1)
-
+                
                 real_output = self.discriminator(disc_real_input)
                 fake_output = self.discriminator(disc_fake_input)
-
+                
                 loss_real = criterion(real_output, real_labels)
                 loss_fake = criterion(fake_output, fake_labels)
-                disc_loss = loss_real + loss_fake
-
+                disc_loss = (loss_real + loss_fake)/2  # Average for log(2) target
+                
                 optim_disc.zero_grad()
                 disc_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
                 optim_disc.step()
-                # Accumulate epoch loss (D)
+                scheduler_disc.step()
+                
                 disc_loss_epoch += disc_loss.item()
-
-                # Train Generator, (z = z + labels)
-                # === Train Generator Multiple Times ===
+                
+                # Train Generator
                 for _ in range(gen_update_freq):
                     z = torch.cat([torch.randn(batch_size, self.noise_dim).to(device), labels], dim=1)
                     fake_data = self.generator(z)
                     disc_fake_input = torch.cat([fake_data, labels], dim=1)
                     fake_output = self.discriminator(disc_fake_input)
-
-                    gen_loss = criterion(fake_output, real_labels)
-
+                    
+                    # Combine adversarial and correlation losses
+                    gen_adv_loss = criterion(fake_output, real_labels)
+                    corr_loss = correlation_loss(real_data, fake_data)
+                    gen_loss = gen_adv_loss + self.lambda_corr * corr_loss # Weighted combination
+                                        
                     optim_gen.zero_grad()
                     gen_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.generator.parameters(), max_norm=1.0)
                     optim_gen.step()
-
-                    gen_loss_epoch += gen_loss.item()
+                    scheduler_gen.step()
                     
+                    gen_loss_epoch += gen_loss.item()
+                    corr_loss_epoch += corr_loss.item()
+            
+            # Average losses
             gen_loss_epoch /= (len(train_loader) * gen_update_freq)
             disc_loss_epoch /= len(train_loader)
-
+            corr_loss_epoch /= (len(train_loader) * gen_update_freq)
+            
+            # Track losses
             gen_losses.append(gen_loss_epoch)
             disc_losses.append(disc_loss_epoch)
-
-            print(f"Epoch {epoch+1}: Generator Loss: {gen_loss_epoch:.4f}, Discriminator Loss: {disc_loss_epoch:.4f}")
-
+            corr_losses.append(corr_loss_epoch)
+            
+            print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
+                f"D Loss: {disc_loss_epoch:.4f}, Correlation Loss: {corr_loss_epoch:.4f}")
+            
+            # Early stopping based on generator loss
             if gen_loss_epoch < architecture_loss and epoch >= warm_up:
                 architecture_loss = gen_loss_epoch
                 best_epoch = epoch
@@ -489,9 +534,7 @@ class cGAN(GAN):
                 if stop_counter >= early_stop:
                     print("[Training Status]: Early stopping triggered!")
                     break
-            else:
-                continue
-
+        
         self._plot_losses(gen_losses, disc_losses, best_epoch)
     
 
@@ -517,7 +560,8 @@ if __name__ == "__main__":
         print("[Main]: Training a GAN model...")
         model = GAN(gen_config=GENERATOR_CONFIG,
                     disc_config=DISCRIMINATOR_CONFIG,
-                    pretrained_path=PRETRAIN_PATH)
+                    pretrained_path=PRETRAIN_PATH,
+                    lambda_corr=LAMBDA_CORR)
         
         model.train_model(train_loader=train_loader, 
             epochs=EPOCHS,
@@ -540,7 +584,8 @@ if __name__ == "__main__":
         model = cGAN(gen_config=GENERATOR_CONFIG,
                     disc_config=DISCRIMINATOR_CONFIG,
                     num_classes=NUM_CLASSES,
-                    pretrained_path=PRETRAIN_PATH)
+                    pretrained_path=PRETRAIN_PATH,
+                    lambda_corr=LAMBDA_CORR)
         
         model.train_model(train_loader=train_loader, 
             epochs=EPOCHS,

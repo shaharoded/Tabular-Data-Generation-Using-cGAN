@@ -4,12 +4,12 @@
 
 This project aims to generate synthetic tabular data using Conditional Generative Adversarial Networks (cGAN), with the option to apply the conditionality on both vanilla GAN and BEGAN. The approach utilizes both real and synthetic data to train models that can effectively mimic the distributions and relationships of features in the original dataset. The model is evaluated based on its ability to generate data with similar feature distributions and its performance in downstream tasks, such as detection and efficacy when used for training a Random Forest model.
 
-Unlike my other projects, this entire project is trainable on CPU.
+This entire project is trainable on CPU.
 
 ![Model Architecture](./Images/cGAN.png)
 
 Key highlights:
-- **Conditional GAN**: The model generates synthetic data conditioned on categorical labels, ensuring that the generated data closely matches the characteristics of the original data. You can experiment with different base architectures for that (vanilla, AE infused, BEGAN).
+- **Conditional GAN**: The model generates synthetic data conditioned on categorical labels, ensuring that the generated data closely matches the characteristics of the original data. You can experiment with different base architectures for that (vanilla GAN, BEGAN).
 - **Evaluation Metrics**: The quality of the synthetic data is evaluated using detection (AUC) and efficacy (AUC ratio), comparing real and synthetic data performance.
 - **Data Preprocessing**: Features are normalized and one-hot encoded for categorical features to ensure that no unintended order is imposed on categorical data.
 
@@ -19,7 +19,6 @@ Key highlights:
 - **`config.py`**: Defines model architecture, training parameters, and data handling settings. Includes optimal configurations from latest experiments. The attached report also contain the optimal configurations for initial model (eg., regular GAN, cGAN, before AE).
 - **`dataset.py`**: Prepares the dataset by splitting it into training, validation, and test sets. Handles preprocessing such as one-hot encoding and normalization.
 - **`gan.py`**: Implements the GAN and cGAN models for data generation.
-- **`ae_gan.py`**: Implements the GAN and cGAN models with the integration of a trained AE model for data generation.
 - **`began.py`**: Implements the BEGAN and cBEGAN models integrated with a pretrained AE model, finetuned as a critic discriminator of the GAN.
 - **`autoencoder.py`**: Implements the AutoEncoder model to represent the data in the latent space.
 - **`Analysis.ipynb`**: A notebook for analyzing the quality of the generated data, including correlation differences and feature distributions.
@@ -33,8 +32,9 @@ Key highlights:
 ### Dataset
 
 The dataset used in this project is assumed to be in `.arff` format. The following preprocessing steps are applied:
+- **Duplicated Column Removal**: Removing the duplicated column 'education'.
 - **One-Hot Encoding**: Categorical features are one-hot encoded to avoid forcing any hierarchy using `LabelEncoder`.
-- **Normalization**: Numerical features are normalized to ensure consistent scale across all features.
+- **Normalization**: Features are normalized to ensure consistent scale across all features.
 
 ### Environment Setup
 
@@ -50,21 +50,17 @@ pip install -r requirements.txt
 ## Features
 
 - **GAN and Conditional GAN (cGAN)**: The project utilizes both a Generative Adversarial Network (GAN) and a Conditional Generative Adversarial Network (cGAN) to generate synthetic tabular data. The cGAN is conditioned on class labels, ensuring that the generated data matches the feature distribution of each class in the original dataset.
-Both concept models are implemented in several architectures - vanilla architecture, AE infused architecture and BEGAN (added with correlation loss).
+Both concept models are implemented in several architectures - vanilla architecture and BEGAN, both trained with added correlation diff as a loss term.
 
 Training process offers an early stopping depending on the Generator's loss and tracking over both part's performance:
 
 ![cGAN_loss](./Images/cGAN_loss.png)
 
-- **AutoEncoder**: An Auto Encoder model is offered in order to represent the data in a lower latent dimention before training the GAN, which should ease of the generator learning the representation, especially given the large number of categorical columns that needs representation. This AE is also integrated directly within the BEGAN architecture, improving the general performance.
-
-- **Post Processing**: Both modules are equiped with a post processing method designated at turning the data to pute categorical when needed.
+- **AutoEncoder**: An Auto Encoder model is offered in order to integrate directly within the BEGAN architecture to improve the general performance.
 
 ![AE_loss](./Images/AE_loss.png)
-  
-- **Data Preprocessing**: 
-  - One-hot encoding for categorical features to avoid any ordering in the categorical data.
-  - Normalization of numerical features to standardize their range and prevent any scale issues.
+
+- **Post Processing**: Both modules are equiped with a post processing method designated at turning the data to pure categorical when needed.
 
 - **Detection Metric**: A Random Forest model is trained on a combined dataset consisting of both real and synthetic data. The model is evaluated on its ability to detect whether a given data point is real or synthetic, with a low AUC indicating that the synthetic data is close to the real data. The Analysis also offers feature importance using a tree method, to examine the failure points of the model.
 
