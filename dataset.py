@@ -41,18 +41,20 @@ class TabularDataset(Dataset):
         self.features = []
         self.targets = []
 
-        # Load ARFF file
+        # Load ARFF file, remove redundent column
         data, self.meta = arff.loadarff(file_path)
-        self.df = pd.DataFrame(data)
+        df = pd.DataFrame(data).drop(['education'], axis=1)
 
+        # Preprocess the data (normalization and encoding)
+        # Will save processed data in self.features, self.targets
+        self.__preprocess(df)
+        
         # Display initial dataset information if requested
         if info:
             self.__print_info()
 
-        # Preprocess the data (normalization and encoding)
-        self.__preprocess()
 
-    def __one_hot_encode(self):
+    def __one_hot_encode(self, df):
         """
         Custom one-hot encoding function for categorical columns.
         - '?' is treated as 'Unknown'.
@@ -61,27 +63,27 @@ class TabularDataset(Dataset):
         - The one-hot encoded columns are normalized to range [-1, 1].
         """
         # Separate continuous and categorical columns
-        cont_cols = self.df.select_dtypes(include=["number"]).columns
-        cat_cols = self.df.select_dtypes(include=["object", "category"]).columns
+        cont_cols = df.select_dtypes(include=["number"]).columns
+        cat_cols = df.select_dtypes(include=["object", "category"]).columns
 
         # Remove the target column from categorical columns if it exists
         cat_cols = [col for col in cat_cols if col != self.target_column]
 
         # Initialize a df with numerical columns to build on cat columns
         # Sort columns: numeric first, then categorical (one-hot encoded)
-        encoded_df = self.df[cont_cols].copy()
+        encoded_df = df[cont_cols].copy()
 
         # One-hot encode categorical columns
         for col in cat_cols:
             # Replace '?' with 'Unknown'
-            self.df[col] = self.df[col].replace('?', 'Unknown')
-            unique_values = self.df[col].unique()
+            df[col] = df[col].replace('?', 'Unknown')
+            unique_values = df[col].unique()
 
             # Generate one-hot columns and store the indices
             one_hot_columns = []
             for value in unique_values:
                 # Create a new column for the value
-                encoded_col = (self.df[col] == value).astype(int)
+                encoded_col = (df[col] == value).astype(int)
                 one_hot_columns.append(encoded_col)
 
             # Concatenate the one-hot columns from 1 original cat column
@@ -96,8 +98,9 @@ class TabularDataset(Dataset):
 
         # Save the updated dataframe
         self.features = encoded_df
+        return encoded_df
 
-    def __preprocess(self):
+    def __preprocess(self, df):
         """
         Preprocess the dataset:
         - Normalize continuous features using MinMax scaling.
@@ -108,36 +111,31 @@ class TabularDataset(Dataset):
         print("[Dataset Status]: Preprocessing dataset...")
 
         # Separate target column and features
-        self.targets = self.df[self.target_column].astype("category").cat.codes
+        self.targets = df[self.target_column].astype("category").cat.codes
 
-        all_features = self.df.drop(columns=[self.target_column])
+        all_features = df.drop(columns=[self.target_column])
 
         # Normalize continuous features
         cont_cols = all_features.select_dtypes(include=["number"]).columns
         scaler = MinMaxScaler(feature_range=(-1, 1))  # Modify the range to [-1, 1]
-        self.df[cont_cols] = scaler.fit_transform(all_features[cont_cols])
+        df[cont_cols] = scaler.fit_transform(all_features[cont_cols])
 
         # One-hot encode categorical features manually (ignoring target column)
-        # Will modify self.df and self.features
-        self.__one_hot_encode()
-        
-        self.num_features = self.features.shape[1]
+        # Will modify df and self.features, finally saving as attributes
+        df = self.__one_hot_encode(df)
+        return df
 
+        
     def __print_info(self):
         """
         Print out information about the dataset, such as column names, data types,
         and unique values for categorical columns.
         """
-        print("[Dataset Info]: Dataset loaded and preprocessing completed.")
-        print(f"Columns in the dataset: {self.df.columns.tolist()}")
+        print(f"Number of rows: {len(self.features)}")
         print(f"Target column: {self.target_column}")
-        print(f"Number of features (columns): {self.df.shape[1]}")
+        print(f"Number of features (columns): {self.features.shape[1]}")
+        print(f"Categorical indices: {self.cat_column_indices}")
         
-        # Print unique values per categorical column
-        for col in self.df.select_dtypes(include=["object", "category"]).columns:
-            unique_values = self.df[col].unique()
-            print(f"Column '{col}': {len(unique_values)} unique values")
-            print(f"Unique values: {unique_values}")
 
     def __augment_minority(self, X, y, seed):
         """
@@ -288,10 +286,8 @@ if __name__ == "__main__":
         file_path=FULL_DATA_PATH,
         target_column=TARGET_COLUMN,
         augment=APPLY_AUGMENTATION,
-        info=False  # Print dataset info
+        info=True  # Print dataset info
     )
-
-    print(dataset.cat_column_indices)
     
     # Perform stratified split
     print("[Main]: Performing stratified train-val-test split...")
@@ -301,7 +297,7 @@ if __name__ == "__main__":
 
     # Check a few samples from the training set
     print("[Main]: Checking samples from the training set...")
-    for i in range(3):  # Check the first 5 samples
+    for i in range(3):  # Check the first few samples
         X_sample, y_sample = train_set[i]
         print(f"Sample {i}: Features: {X_sample[:20]}, Label: {y_sample}")
 

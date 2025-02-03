@@ -13,7 +13,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 # Local Code
 from config import *
 from dataset import *
-from nn_utils import build_network
+from nn_utils import build_network, correlation_loss
 
 class Generator(nn.Module):
     def __init__(self, config):
@@ -45,7 +45,7 @@ class Discriminator(nn.Module):
     
     
 class GAN(nn.Module):
-    def __init__(self, gen_config, disc_config, pretrained_path=None):
+    def __init__(self, gen_config, disc_config, pretrained_path=None, lambda_corr=0.1):
         """
         Initialize the GAN with generator and discriminator architectures.
         
@@ -53,6 +53,7 @@ class GAN(nn.Module):
             gen_config (list[dict]): Configuration for generator layers.
             disc_config (list[dict]): Configuration for discriminator layers.
             pretrained_path (str): Path to pretrained models directory.
+            lambda_corr (float): Learning rate for `corr_loss` term (default: 0.1).
         """
         super(GAN, self).__init__()
         print('[Model Status]: Building Model...')
@@ -62,6 +63,7 @@ class GAN(nn.Module):
         self.disc_config = disc_config
         self.noise_dim = gen_config[0].get("input_dim") # Noise dimention is equal to the input
         self.cat_column_indices = []    # For generation function of cat values
+        self.lambda_corr = lambda_corr
         
         if pretrained_path:
             try:
@@ -131,108 +133,130 @@ class GAN(nn.Module):
     
     def train_model(self, train_loader, epochs, warm_up, lr, weight_decay, device, early_stop=5, gen_update_freq=5, save_path=None):
         """
-        Train the GAN.
-        Best model weights are saved, and the improvement is decided by loss(Gen),
-        As the directive of this model is to create reliable fake data.
-
+        Enhanced GAN training with correlation loss, gradient clipping, and learning rate scheduling.
+        
         Args:
-            train_loader (DataLoader): DataLoader for training data.
-            epochs (int): Number of epochs to train.
-            warm_up (int): Number of warm up epochs which will not count towards early stop.
-            lr (float): Learning rate.
-            weight_decay (float): Applies L2 regularization on the models.
-            device (torch.device): Device to train on.
-            early_stop (int, optional): Early stopping patience. Defaults to 5.
-            gen_update_freq (int): Number of Generator updates per discriminator update.
-            save_path (str): Full path where to save the model weights, which is identical to pretrain_path.
+            (previous args remain the same)
+            
+        Additional features:
+            - Correlation loss between real and fake data distributions
+            - Gradient clipping to prevent exploding gradients
+            - Learning rate scheduling with warm-up and cosine annealing
+            - Separate schedulers for generator and discriminator
         """
-        # Initialization update
         self.cat_column_indices = train_loader.cat_column_indices
         
-        # Loss function
+        # Loss functions
         criterion = nn.BCELoss()
-
+        
         # Optimizers
-        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
-        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr, betas=(0.5, 0.999), weight_decay=weight_decay)
-
+        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
+        optim_disc = optim.Adam(self.discriminator.parameters(), lr=lr/10, betas=(0.5, 0.999), weight_decay=weight_decay)
+        
+        # Learning rate schedulers
+        scheduler_gen = optim.lr_scheduler.OneCycleLR(
+            optim_gen,
+            max_lr=lr,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,  # Warm-up phase
+            anneal_strategy='cos'
+        )
+        
+        scheduler_disc = optim.lr_scheduler.OneCycleLR(
+            optim_disc,
+            max_lr=lr,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
+        
         # For early stopping
         architecture_loss = float("inf")
         best_epoch = 0
         stop_counter = 0
-
-        # Track losses for plotting
-        gen_losses = []
-        disc_losses = []
+        
+        # Track losses
+        gen_losses, disc_losses, corr_losses = [], [], []
         self.train()
         
         for epoch in range(epochs):
-            gen_loss_epoch, disc_loss_epoch = 0, 0
-
+            gen_loss_epoch, disc_loss_epoch, corr_loss_epoch = 0, 0, 0
+            
             for real_data, _ in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
                 real_data = real_data.to(device)
                 batch_size = real_data.size(0)
-
-                # Labels for real and fake data
+                
+                # Labels
                 real_labels = torch.ones(batch_size, 1).to(device)
                 fake_labels = torch.zeros(batch_size, 1).to(device)
-
+                
                 # Train Discriminator
                 z = torch.randn(batch_size, self.noise_dim).to(device)
                 fake_data = self.generator(z)
+                
                 real_output = self.discriminator(real_data)
                 fake_output = self.discriminator(fake_data.detach())
-
+                
                 loss_real = criterion(real_output, real_labels)
                 loss_fake = criterion(fake_output, fake_labels)
                 disc_loss = loss_real + loss_fake
-
+                
                 optim_disc.zero_grad()
                 disc_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.discriminator.parameters(), max_norm=1.0)
                 optim_disc.step()
-                # Accumulate epoch losses (D)
+                scheduler_disc.step()
+                
                 disc_loss_epoch += disc_loss.item()
-
-                # === Train Generator Multiple Times ===
+                
+                # Train Generator
                 for _ in range(gen_update_freq):
                     z = torch.randn(batch_size, self.noise_dim).to(device)
                     fake_data = self.generator(z)
                     fake_output = self.discriminator(fake_data)
-
-                    gen_loss = criterion(fake_output, real_labels)
-
+                    
+                    # Combine adversarial and correlation losses
+                    gen_adv_loss = criterion(fake_output, real_labels)
+                    corr_loss = correlation_loss(real_data, fake_data)
+                    gen_loss = gen_adv_loss + self.lambda_corr * corr_loss  # Weighted combination
+                    
                     optim_gen.zero_grad()
                     gen_loss.backward()
+                    torch.nn.utils.clip_grad_norm_(self.generator.parameters(), max_norm=1.0)
                     optim_gen.step()
-
-                    # Accumulate generator loss for the epoch
+                    scheduler_gen.step()
+                    
                     gen_loss_epoch += gen_loss.item()
-
-            # Average losses for the epoch
+                    corr_loss_epoch += corr_loss.item()
+            
+            # Average losses
             gen_loss_epoch /= (len(train_loader) * gen_update_freq)
             disc_loss_epoch /= len(train_loader)
-
-            # Track the losses for plotting
+            corr_loss_epoch /= (len(train_loader) * gen_update_freq)
+            
+            # Track losses
             gen_losses.append(gen_loss_epoch)
             disc_losses.append(disc_loss_epoch)
-
-            print(f"[Training Status]: Epoch {epoch+1}: Generator Loss: {gen_loss_epoch:.4f}, Discriminator Loss: {disc_loss_epoch:.4f}")
-
-            # Early stopping based on generator loss and save best model
-            if gen_loss_epoch  < architecture_loss and epoch >= warm_up:
+            corr_losses.append(corr_loss_epoch)
+            
+            print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
+                f"D Loss: {disc_loss_epoch:.4f}, Correlation Loss: {corr_loss_epoch:.4f}")
+            
+            # Early stopping based on generator loss
+            if gen_loss_epoch < architecture_loss and epoch >= warm_up:
                 architecture_loss = gen_loss_epoch
-                best_epoch=epoch
-                self.save_weights(epoch, gen_loss_epoch, disc_loss_epoch, save_path) 
+                best_epoch = epoch
+                self.save_weights(epoch, gen_loss_epoch, disc_loss_epoch, save_path)
                 stop_counter = 0
-            elif gen_loss_epoch  >= architecture_loss:
+            elif gen_loss_epoch >= architecture_loss:
                 stop_counter += 1
                 if stop_counter >= early_stop:
                     print("[Training Status]: Early stopping triggered!")
                     break
-            else:
-                continue
-
-        # Plot losses at the end of training
+        
+        # Plot losses
         self._plot_losses(gen_losses, disc_losses, best_epoch)
         
     def _post_processing(self, generated_data):
@@ -330,7 +354,7 @@ class cGAN(GAN):
     '''
     A conditional GAN architecture inheriting from the original architecture for modularity.
     '''
-    def __init__(self, gen_config, disc_config, num_classes, pretrained_path=None):
+    def __init__(self, gen_config, disc_config, num_classes, pretrained_path=None, lambda_corr=0.1):
         """
         Initialize the conditional GAN with generator and discriminator architectures.
         
@@ -339,6 +363,7 @@ class cGAN(GAN):
             disc_config (list[dict]): Configuration for discriminator layers.
             num_classes (int): Dimension of the one-hot encoded labels.
             pretrained_path (str): Path to pretrained models directory.
+            lambda_corr (float): Learning rate for `corr_loss` term (default: 0.1).
         """
         # Dynamically adjust input dimensions for conditional input
         gen_config[0]["input_dim"] += num_classes  # Adjust generator's input layer
