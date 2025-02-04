@@ -551,7 +551,7 @@ if __name__ == "__main__":
         
     if MODEL_NAME == 'gan':
         print("[Main]: Training a BEGAN model...")
-        model = BEGAN(gen_config=GENERATOR_CONFIG,
+        model = BEGAN(gen_config=BE_GENERATOR_CONFIG,
                     pretrained_autoencoder=autoencoder,
                     pretrained_path=PRETRAIN_PATH,
                     gamma=GAMMA,
@@ -578,7 +578,7 @@ if __name__ == "__main__":
     
     elif MODEL_NAME == 'cgan':
         print("[Main]: Training a WcGAN model...")
-        model = cBEGAN(gen_config=GENERATOR_CONFIG,
+        model = cBEGAN(gen_config=BE_GENERATOR_CONFIG,
                     pretrained_autoencoder=autoencoder,
                     gamma=GAMMA,
                     lambda_k=LAMBDA_K,

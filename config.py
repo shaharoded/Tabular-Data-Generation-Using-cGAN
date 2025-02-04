@@ -27,7 +27,8 @@ DATA_DIM = 92 # The size of the feature vector
 NOISE_DIM = 32  # The size of the initial noise vector
 LATENT_DIM = 64 # The dimension of the latent (encoding) dimension
 
-## Generator Configuration
+## GAN
+### Generator Configuration
 GENERATOR_CONFIG = [
     {"input_dim": NOISE_DIM, "output_dim": 128, "activation": nn.LeakyReLU(0.2), "norm": 'batch', "dropout": 0.1},
     {"input_dim": 128, "output_dim": 256, "activation": nn.LeakyReLU(0.2), "norm": 'batch', "dropout": 0.1},
@@ -36,19 +37,29 @@ GENERATOR_CONFIG = [
     {"input_dim": 1024, "output_dim": DATA_DIM, "activation": nn.Tanh(), "dropout": 0.0},
 ]
 
+### Discriminator Configuration
 DISCRIMINATOR_CONFIG = [
     {"input_dim": DATA_DIM, "output_dim": 128, "activation": nn.LeakyReLU(0.2), "norm": 'layer', "dropout": 0.2},
     {"input_dim": 128, "output_dim": 32, "activation": nn.LeakyReLU(0.2), "norm": 'layer', "dropout": 0.2},
     {"input_dim": 32, "output_dim": 1, "activation": nn.Sigmoid(), "dropout": 0.0},
 ]
 
+## BEGAN
+### Generator Configuration
+BE_GENERATOR_CONFIG = [
+    {"input_dim": NOISE_DIM, "output_dim": 128, "activation": nn.LeakyReLU(0.2), "norm": 'batch', "dropout": 0.1},
+    {"input_dim": 128, "output_dim": 256, "activation": nn.LeakyReLU(0.2), "norm": 'batch', "dropout": 0.1},
+    {"input_dim": 256, "output_dim": 512, "activation": nn.LeakyReLU(0.2), "norm": 'batch', "dropout": 0.1},
+    {"input_dim": 512, "output_dim": 1024, "activation": nn.LeakyReLU(0.2), "norm": 'batch', "dropout": 0.1},
+    {"input_dim": 1024, "output_dim": LATENT_DIM, "activation": nn.Tanh(), "dropout": 0.0},
+]
 # Encoder Configuration
 ENCODER_CONFIG = [
     {"input_dim": DATA_DIM, "output_dim": 1024, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
     {"input_dim": 1024, "output_dim": 512, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
     {"input_dim": 512, "output_dim": 256, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
     {"input_dim": 256, "output_dim": 128, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
-    {"input_dim": 128, "output_dim": LATENT_DIM, "activation": None, "dropout": 0.0},  # Latent space, no activation
+    {"input_dim": 128, "output_dim": LATENT_DIM, "activation": None, "dropout": 0.0},  # No activation for latent space
 ]
 
 # Decoder Configuration
@@ -57,7 +68,7 @@ DECODER_CONFIG = [
     {"input_dim": 128, "output_dim": 256, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
     {"input_dim": 256, "output_dim": 512, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
     {"input_dim": 512, "output_dim": 1024, "activation": nn.ReLU(), "norm": 'batch', "dropout": 0.2},
-    {"input_dim": 1024, "output_dim": DATA_DIM, "activation": nn.Tanh(), "dropout": 0.0},  # Reconstructed output
+    {"input_dim": 1024, "output_dim": DATA_DIM, "activation": nn.Tanh(), "dropout": 0.0},  # Tanh to match [-1,1] range
 ]
 
 # GAN\AE Training Config
@@ -68,7 +79,7 @@ LAMBDA_K = 1e-1     # Learning rate for `k_t` balance term, for BEGAN.
 LAMBDA_CORR = 0.1   # Level of influence of the correlation loss on global loss
 GAMMA = 0.75        # BEGAN balance factor
 GAN_EARLY_STOP = 10     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
-AE_EARLY_STOP = 5     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
+AE_EARLY_STOP = 10     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
 WARMUP_EPOCHS = 10  # Define a number of GAN warmup iterations in which the model won't count towards an early stop.
-EPOCHS = 30    #   A high number of epochs, hoping for an early stopping 
+EPOCHS = 100    #   A high number of epochs, hoping for an early stopping 
 GENERATOR_UPDATE_FREQ = 3   # Number of G updates per D updates, to balance their losses.

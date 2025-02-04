@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 # Local Code
 from config import *
 from dataset import *
-from nn_utils import build_network
+from nn_utils import build_network, composite_loss
 
 
 class Autoencoder(nn.Module):
@@ -57,8 +57,90 @@ class Autoencoder(nn.Module):
         reconstructed = self.decoder(latent)
         return latent, reconstructed
 
+    # def train_model(self, train_loader, val_loader, epochs, lr, 
+    #                 device, early_stop=5, save_path=None):
+    #     """
+    #     Train the autoencoder with early stopping.
+
+    #     Args:
+    #         train_loader (DataLoader): Training data loader.
+    #         val_loader (DataLoader): Validation data loader.
+    #         epochs (int): Number of epochs to train.
+    #         lr (float): Learning rate.
+    #         device (torch.device): Device to train on.
+    #         early_stop (int, optional): Early stopping patience. Defaults to 5.
+    #         save_path (str, optional): Path to save the best model. Defaults to None.
+
+    #     Returns:
+    #         list: Training and validation losses per epoch.
+    #     """
+    #     # Loss function and optimizer
+    #     criterion = nn.SmoothL1Loss()   # Recommended for such tasks
+    #     optimizer = torch.optim.Adam(self.parameters(), lr=lr*10)
+    #     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
+
+    #     best_val_loss = float("inf")
+    #     stop_counter = 0
+    #     train_losses, val_losses = [], []
+
+    #     for epoch in range(epochs):          
+    #         # Training phase
+    #         self.train()
+    #         train_loss = 0.0
+    #         with tqdm(train_loader, desc="Training", leave=False) as train_bar:
+    #             for batch in train_bar:
+    #                 if isinstance(batch, (list, tuple)):
+    #                     batch = batch[0]  # Extract features if dataset returns (features, labels)
+    #                 batch = batch.to(device)
+    #                 _, reconstructed = self(batch)
+    #                 loss = criterion(reconstructed, batch)
+    #                 optimizer.zero_grad()
+    #                 loss.backward()
+    #                 optimizer.step()
+    #                 train_loss += loss.item()
+    #                 train_bar.set_postfix(loss=loss.item())
+
+    #         train_loss /= len(train_loader)
+    #         train_losses.append(train_loss)
+
+    #         # Validation phase
+    #         self.eval()
+    #         val_loss = 0.0
+    #         with torch.no_grad():
+    #             with tqdm(val_loader, desc="Validation", leave=False) as val_bar:
+    #                 for batch in val_bar:
+    #                     if isinstance(batch, (list, tuple)):
+    #                         batch = batch[0]
+    #                     batch = batch.to(device)
+    #                     _, reconstructed = self(batch)
+    #                     loss = criterion(reconstructed, batch)
+    #                     val_loss += loss.item()
+    #                     val_bar.set_postfix(loss=loss.item())
+
+    #         val_loss /= len(val_loader)
+    #         val_losses.append(val_loss)
+
+    #         print(f"Epoch {epoch+1}/{epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            
+    #         # Adjust learning rate based on validation loss
+    #         scheduler.step(val_loss)
+            
+    #         # Early stopping logic
+    #         if val_loss < best_val_loss:
+    #             best_val_loss = val_loss
+    #             stop_counter = 0
+    #             if save_path:
+    #                 self.save_weights(save_path)
+    #         else:
+    #             stop_counter += 1
+    #             if stop_counter >= early_stop:
+    #                 print("[Training Status]: Early stopping triggered!")
+    #                 print(f"[Training Status]: Autoencoder saved to {save_path}")
+    #                 break
+    #     self.__plot_losses(train_losses, val_losses)
+    
     def train_model(self, train_loader, val_loader, epochs, lr, 
-                    device, early_stop=5, save_path=None):
+                device, early_stop=5, save_path=None, num_features=6, beta=0.5):
         """
         Train the autoencoder with early stopping.
 
@@ -70,42 +152,57 @@ class Autoencoder(nn.Module):
             device (torch.device): Device to train on.
             early_stop (int, optional): Early stopping patience. Defaults to 5.
             save_path (str, optional): Path to save the best model. Defaults to None.
+            num_features (int, optional): Number of numeric features in the data, assumin the first k are the numeric ones.
+            beta (float, optional): The balance parameter between the categorical loss and the numeric loss.
 
         Returns:
             list: Training and validation losses per epoch.
         """
-        # Loss function and optimizer
-        criterion = nn.SmoothL1Loss()   # Recommended for such tasks
+        # Optimizer
         optimizer = torch.optim.Adam(self.parameters(), lr=lr*10)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=5, factor=0.5)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode='min', patience=5, factor=0.5
+        )
 
         best_val_loss = float("inf")
         stop_counter = 0
         train_losses, val_losses = [], []
-
+        
         for epoch in range(epochs):          
             # Training phase
             self.train()
-            train_loss = 0.0
+            train_loss, train_num_loss, train_cat_loss = 0.0, 0.0, 0.0
+            
             with tqdm(train_loader, desc="Training", leave=False) as train_bar:
                 for batch in train_bar:
                     if isinstance(batch, (list, tuple)):
-                        batch = batch[0]  # Extract features if dataset returns (features, labels)
+                        batch = batch[0]
                     batch = batch.to(device)
                     _, reconstructed = self(batch)
-                    loss = criterion(reconstructed, batch)
+                    loss, num_loss, cat_loss = composite_loss(reconstructed, batch, num_features, beta)
+                    
+                    train_num_loss += num_loss.item()
+                    train_cat_loss += cat_loss.item()
+                    
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     train_loss += loss.item()
-                    train_bar.set_postfix(loss=loss.item())
+                    train_bar.set_postfix(
+                        loss=loss.item(), 
+                        num_loss=num_loss.item(), 
+                        cat_loss=cat_loss.item()
+                    )
 
             train_loss /= len(train_loader)
+            train_num_loss /= len(train_loader)
+            train_cat_loss /= len(train_loader)
             train_losses.append(train_loss)
 
             # Validation phase
             self.eval()
-            val_loss = 0.0
+            val_loss, val_num_loss, val_cat_loss = 0.0, 0.0, 0.0
+            
             with torch.no_grad():
                 with tqdm(val_loader, desc="Validation", leave=False) as val_bar:
                     for batch in val_bar:
@@ -113,14 +210,26 @@ class Autoencoder(nn.Module):
                             batch = batch[0]
                         batch = batch.to(device)
                         _, reconstructed = self(batch)
-                        loss = criterion(reconstructed, batch)
+                        loss, num_loss, cat_loss = composite_loss(reconstructed, batch, num_features, beta)
+                        
+                        val_num_loss += num_loss.item()
+                        val_cat_loss += cat_loss.item()
+                        
                         val_loss += loss.item()
-                        val_bar.set_postfix(loss=loss.item())
+                        val_bar.set_postfix(
+                            loss=loss.item(),
+                            num_loss=num_loss.item(),
+                            cat_loss=cat_loss.item()
+                        )
 
             val_loss /= len(val_loader)
+            val_num_loss /= len(val_loader)
+            val_cat_loss /= len(val_loader)
             val_losses.append(val_loss)
 
-            print(f"Epoch {epoch+1}/{epochs}: Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            print(f"Epoch {epoch+1}/{epochs}:")
+            print(f"  Train - Total: {train_loss:.4f}, Num: {train_num_loss:.4f}, Cat: {train_cat_loss:.4f}")
+            print(f"  Val   - Total: {val_loss:.4f}, Num: {val_num_loss:.4f}, Cat: {val_cat_loss:.4f}")
             
             # Adjust learning rate based on validation loss
             scheduler.step(val_loss)
@@ -137,6 +246,7 @@ class Autoencoder(nn.Module):
                     print("[Training Status]: Early stopping triggered!")
                     print(f"[Training Status]: Autoencoder saved to {save_path}")
                     break
+
         self.__plot_losses(train_losses, val_losses)
     
     
