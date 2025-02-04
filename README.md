@@ -60,6 +60,8 @@ Training process offers an early stopping depending on the Generator's loss and 
 
 ![AE_loss](./Images/AE_loss.png)
 
+NOTE: This model requires longer training session, and can benefit from 100+ epochs.
+
 - **Post Processing**: Both modules are equiped with a post processing method designated at turning the data to pure categorical when needed.
 
 - **Detection Metric**: A Random Forest model is trained on a combined dataset consisting of both real and synthetic data. The model is evaluated on its ability to detect whether a given data point is real or synthetic, with a low AUC indicating that the synthetic data is close to the real data. The Analysis also offers feature importance using a tree method, to examine the failure points of the model.
@@ -83,7 +85,7 @@ The current implementation showed insufficient results, sufferring from difficul
 The detection metric evaluates how similar the synthetic data is to the real data. A low AUC score in this case is desirable, indicating that the model cannot distinguish between real and synthetic data. A high similarity between the real and synthetic data means that the model is unable to tell the difference between the two.
 
 ```
-Average AUC for detection (cGAN): 1.0000 -> BAD!
+(Best) Average AUC for detection (GAN): 0.997 -> BAD! (Optimum at ~0.5)
 ```
 
 ### Efficacy Metric
