@@ -97,7 +97,7 @@ class Autoencoder(nn.Module):
                         batch = batch[0]
                     batch = batch.to(device)
                     _, reconstructed = self(batch)
-                    loss, num_loss, cat_loss = composite_loss(reconstructed, batch, num_features, beta)
+                    loss, num_loss, cat_loss = composite_loss(batch, reconstructed, num_features, beta)
                     
                     train_num_loss += num_loss.item()
                     train_cat_loss += cat_loss.item()
@@ -128,7 +128,7 @@ class Autoencoder(nn.Module):
                             batch = batch[0]
                         batch = batch.to(device)
                         _, reconstructed = self(batch)
-                        loss, num_loss, cat_loss = composite_loss(reconstructed, batch, num_features, beta)
+                        loss, num_loss, cat_loss = composite_loss(batch, reconstructed, num_features, beta)
                         
                         val_num_loss += num_loss.item()
                         val_cat_loss += cat_loss.item()

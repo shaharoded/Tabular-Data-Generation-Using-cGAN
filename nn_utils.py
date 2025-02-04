@@ -83,14 +83,14 @@ def correlation_loss(real_data, fake_data):
     return torch.mean(corr_diff)
 
 
-def composite_loss(reconstructed, original, num_features=6, beta=0.5):
+def composite_loss(original, reconstructed, num_features=6, beta=0.5):
     """
     Composite loss for AE with separate weighting for numerical and categorical features,
     using SmoothL1Loss for both but potentially different beta values.
     
     Args:
-        reconstructed: The reconstructed data
         original: The original data
+        reconstructed: The reconstructed data
         num_features: Number of numerical features
         beta: Weight balance between numerical and categorical loss
     Returns:

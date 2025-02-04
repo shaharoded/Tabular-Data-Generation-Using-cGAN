@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 # Local Code
 from config import *
 from dataset import *
-from nn_utils import build_network, correlation_loss
+from nn_utils import build_network, correlation_loss, composite_loss
 from autoencoder import Autoencoder
 
 
@@ -100,6 +100,7 @@ class BEGAN(nn.Module):
             self.decoder.load_state_dict(checkpoint['decoder_state_dict'])
             self.encoder.load_state_dict(checkpoint['encoder_state_dict'])
             self.cat_column_indices = checkpoint.get('cat_column_indices',[])
+            print("[Model Status]: Successfully loaded model weights")
             
         else:
             print(f"[Model Status]: Pre-trained model not found at {pretrained_path}, starting from scratch.")
@@ -152,6 +153,7 @@ class BEGAN(nn.Module):
         """
         Train the BEGAN model.
         Best model weights are saved, and the improvement is decided by Generator loss.
+        Uses custom loss calculation based on SmoothL1 to measure how different the reconstructed samples are from the original ones.
         Adds correlation difference between real and fake data as loss term to the generator.
         
         Args:
@@ -169,11 +171,26 @@ class BEGAN(nn.Module):
         
         # Optimizers
         optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
-        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr/2, betas=(0.5, 0.999), weight_decay=weight_decay)
+        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr*1e-3, betas=(0.5, 0.999), weight_decay=weight_decay)
         
         # Schedulers - exponential decay with small gamma
-        scheduler_gen = optim.lr_scheduler.ExponentialLR(optim_gen, gamma=0.995)
-        scheduler_critic = optim.lr_scheduler.ExponentialLR(optim_critic, gamma=0.995)
+        scheduler_gen = optim.lr_scheduler.OneCycleLR(
+            optim_gen,
+            max_lr=lr,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
+
+        scheduler_critic = optim.lr_scheduler.OneCycleLR(
+            optim_critic,
+            max_lr=lr*1e-3,  # Slower critic learning
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
         
         # Early stopping variables
         best_loss = float("inf")
@@ -194,54 +211,85 @@ class BEGAN(nn.Module):
                 # Encode real data into latent space
                 with torch.no_grad():
                     real_latent = self.encoder(real_data)
-                
-                # === Critic Step ===
-                optim_critic.zero_grad()
-                    
-                # Generate fake data for critic
-                z = torch.randn(batch_size, self.noise_dim).to(device)
-                fake_latent_critic = self.generator(z).detach()
-                fake_data_critic = self.decoder(fake_latent_critic)
 
-                # Train critic
-                real_reconstructed = self.decoder(real_latent)
-                fake_reconstructed = self.decoder(fake_latent_critic)
-
-                real_loss = torch.mean(torch.abs(real_data - real_reconstructed))
-                fake_loss = torch.mean(torch.abs(fake_data_critic - fake_reconstructed))
-
-                critic_loss = real_loss - self.k_t * fake_loss
-                critic_loss.backward(retain_graph=True)  # Add retain_graph=True here
-                torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
-                optim_critic.step()
+                # Set a very small learning rate for C during warm-up
+                if epoch < warm_up:
+                    warmup_factor = (epoch + 1) / warm_up  # Gradually increase
+                    optim_critic.param_groups[0]['lr'] = lr * 1e-4 * warmup_factor  # Scale up slowly
+                else:
+                    optim_critic.param_groups[0]['lr'] = lr * 1e-3  # Normal learning rate
                 
                 # === Generator Step ===
+                # Directive: Improve reconstruction of fake samples.
+                # L_G = L_D_fake = abs(reconstructed_fake_data - fake_data)
+                # Loss term is added with correlation loss.
+
                 optim_gen.zero_grad()
 
                 # Generate fresh fake data for generator
                 z = torch.randn(batch_size, self.noise_dim).to(device)
-                fake_latent_gen = self.generator(z)
-                fake_data_gen = self.decoder(fake_latent_gen)
-                fake_reconstructed_gen = self.decoder(fake_latent_gen)
-
-                # Train generator
-                corr_loss = correlation_loss(real_data, fake_data_gen) # Calculate correlation loss
-                recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
-                generator_loss = recon_loss + (self.lambda_corr * (1 - self.k_t)) * corr_loss   # Increase corr loss when k_t is small
+                fake_latent = self.generator(z)
+                fake_data = self.decoder(fake_latent)
+                
+                # The critic should try to reconstruct the fake data
+                fake_latent = self.encoder(fake_data)
+                fake_reconstructed = self.decoder(fake_latent)
+                
+                # Generator loss is based on critic's ability to reconstruct
+                recon_loss, _, _ = composite_loss(fake_data, fake_reconstructed)
+                
+                # Correlation loss term
+                corr_loss = correlation_loss(real_data, fake_data) # Calculate correlation loss
+                corr_weight = self.lambda_corr * (1 - self.k_t)  # Increase when critic is strong
+                
+                # Final loss and backpropagation 
+                generator_loss = recon_loss + corr_weight * corr_loss
                 generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
-                torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
+                torch_utils.clip_grad_norm_(self.generator.parameters(), max_norm=0.5)  # Apply gradient clipping
                 optim_gen.step()
+                scheduler_gen.step()
+                gen_loss_epoch += generator_loss.mean().item()
+                
+                # === Critic Step ===
+                # Directive: Build real samples properly and fake samples badly.
+                # L_D = L_D_real - k*L_D_fake
+                # L_D_real = abs(reconstructed_real_data - real_data)
+                # L_D_fake = abs(reconstructed_fake_data - fake_data)
+                
+                optim_critic.zero_grad()
+                    
+                # Generate fake data for critic
+                z = torch.randn(batch_size, self.noise_dim).to(device)
+                fake_latent = self.generator(z).detach()
+                fake_data = self.decoder(fake_latent)
+                
+                # Fake data reconstructions:
+                fake_latent = self.encoder(fake_data)
+                fake_reconstructed = self.decoder(fake_latent)
+                
+                # Real data reconstructions:
+                real_latent = self.encoder(real_data)
+                real_reconstructed = self.decoder(real_latent)
+                
+                # Critic losses:
+                real_loss, _, _ = composite_loss(real_data, real_reconstructed)
+                fake_loss, _, _ = composite_loss(fake_data, fake_reconstructed)
+                critic_loss = real_loss - self.k_t * fake_loss
 
-                # Update k_t
-                with torch.no_grad():  # Add no_grad here for k_t update
-                    self.k_t = max(0, min(1, self.k_t + self.lambda_k * (self.gamma * real_loss.item() - fake_loss.item())))
+                critic_loss.backward(retain_graph=True)  # Add retain_graph=True here
+                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), max_norm=1.0)  # Apply gradient clipping
+                optim_critic.step()
+                scheduler_critic.step()
+                crit_loss_epoch += critic_loss.mean().item()
 
-                gen_loss_epoch += generator_loss.item()
-                crit_loss_epoch += critic_loss.item()
-
-            # Step the schedulers at the end of each epoch
-            scheduler_gen.step()
-            scheduler_critic.step()
+                # === K_t Step ===
+                # Directive: Increase k if fake_loss is a lot bigger than the real_loss. 
+                # Gamma exists to anticipate real_loss > fake_loss and account for it.
+                # k_t = k_t + lr*(fake_loss - gamma * real_loss)
+                with torch.no_grad():
+                    real_loss_mean = real_loss.mean()
+                    fake_loss_mean = fake_loss.mean()
+                    self.k_t = max(0, min(1, self.k_t + self.lambda_k * (fake_loss_mean - self.gamma * real_loss_mean))) # Clip to ensure k > 0
             
             # Log the losses
             gen_loss_epoch /= len(train_loader)
@@ -423,6 +471,10 @@ class cBEGAN(BEGAN):
         """
         self.cat_column_indices = train_loader.cat_column_indices
         
+        # Loss functions
+        criterion = nn.MSELoss(reduction='none')
+        
+        # Optimizers
         optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
         optim_critic = optim.Adam(self.decoder.parameters(), lr=lr/2, betas=(0.5, 0.999), weight_decay=weight_decay)
 
@@ -463,10 +515,12 @@ class cBEGAN(BEGAN):
                 real_reconstructed = self.decoder(real_latent)
                 fake_reconstructed = self.decoder(fake_latent_critic)
 
-                real_loss = torch.mean(torch.abs(real_data - real_reconstructed))
-                fake_loss = torch.mean(torch.abs(fake_data_critic - fake_reconstructed))
+                # Average across batch dimension only.
+                real_loss = criterion(real_reconstructed, real_data).mean(dim=0)  # Shape: [batch_size, n_features] -> Shape: [n_features]
+                fake_loss = criterion(fake_reconstructed, fake_data_critic).mean(dim=0)
 
                 critic_loss = real_loss - self.k_t * fake_loss
+                critic_loss = critic_loss.sum()  # Final reduction for backward()
                 critic_loss.backward(retain_graph=True)
                 torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
                 optim_critic.step()
@@ -483,7 +537,7 @@ class cBEGAN(BEGAN):
                 
                 # Train generator
                 corr_loss = correlation_loss(real_data, fake_data_gen) # Calculate correlation loss
-                recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen))
+                recon_loss = torch.mean(torch.abs(fake_data_gen - fake_reconstructed_gen)**2)
                 generator_loss = recon_loss + (self.lambda_corr * (1 - self.k_t)) * corr_loss   # Increase corr loss when k_t is small
                 generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
                 torch_utils.clip_grad_norm_(self.generator.parameters(), 1.0)  # Apply gradient clipping
@@ -521,6 +575,166 @@ class cBEGAN(BEGAN):
                     print("[Training Status]: Early stopping triggered!")
                     break
 
+        self._plot_losses(gen_losses, crit_losses, k_values, best_epoch)
+        
+    
+    def train_model(self, train_loader, epochs, warm_up, lr, weight_decay, device, early_stop=5, save_path=None):
+        """
+        Train the conditional BEGAN model, with the addition of the labels.
+        """
+        # Initialization update
+        self.cat_column_indices = train_loader.cat_column_indices
+        
+        # Optimizers
+        optim_gen = optim.Adam(self.generator.parameters(), lr=lr, betas=(0.5, 0.999))
+        optim_critic = optim.Adam(self.decoder.parameters(), lr=lr*1e-3, betas=(0.5, 0.999), weight_decay=weight_decay)
+        
+        # Schedulers - exponential decay with small gamma
+        scheduler_gen = optim.lr_scheduler.OneCycleLR(
+            optim_gen,
+            max_lr=lr,
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
+
+        scheduler_critic = optim.lr_scheduler.OneCycleLR(
+            optim_critic,
+            max_lr=lr*1e-3,  # Slower critic learning
+            epochs=epochs,
+            steps_per_epoch=len(train_loader),
+            pct_start=0.3,
+            anneal_strategy='cos'
+        )
+        
+        # Early stopping variables
+        best_loss = float("inf")
+        stop_counter = 0
+        best_epoch = 0
+
+        # Loss tracking for plotting
+        gen_losses, crit_losses, k_values = [], [], []       
+
+        self.train()
+        for epoch in range(epochs):
+            gen_loss_epoch, crit_loss_epoch = 0, 0
+
+            for real_data, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
+                real_data, labels = real_data.to(device), labels.to(device)
+                batch_size = real_data.size(0)
+                
+                # One-hot encode labels if not already
+                if labels.dim() == 1:
+                    labels = F.one_hot(labels, num_classes=self.num_classes).float()
+
+                # Encode real data into latent space
+                with torch.no_grad():
+                    real_latent = self.encoder(real_data)
+
+                # Set a very small learning rate for C during warm-up
+                if epoch < warm_up:
+                    warmup_factor = (epoch + 1) / warm_up  # Gradually increase
+                    optim_critic.param_groups[0]['lr'] = lr * 1e-4 * warmup_factor  # Scale up slowly
+                else:
+                    optim_critic.param_groups[0]['lr'] = lr * 1e-3  # Normal learning rate
+                
+                # === Generator Step ===
+                # Directive: Improve reconstruction of fake samples.
+                # L_G = L_D_fake = abs(reconstructed_fake_data - fake_data)
+                # Loss term is added with correlation loss.
+
+                optim_gen.zero_grad()
+
+                # Generate fresh fake data for generator
+                z = torch.randn(batch_size, self.noise_dim).to(device)
+                z = torch.cat([z, labels], dim=1)
+                fake_latent = self.generator(z)
+                fake_data = self.decoder(fake_latent)
+                
+                # The critic should try to reconstruct the fake data
+                fake_latent = self.encoder(fake_data)
+                fake_reconstructed = self.decoder(fake_latent)
+                
+                # Generator loss is based on critic's ability to reconstruct
+                recon_loss, _, _ = composite_loss(fake_data, fake_reconstructed)
+                
+                # Correlation loss term
+                corr_loss = correlation_loss(real_data, fake_data) # Calculate correlation loss
+                corr_weight = self.lambda_corr * (1 - self.k_t)  # Increase when critic is strong
+                
+                # Final loss and backpropagation 
+                generator_loss = recon_loss + corr_weight * corr_loss
+                generator_loss.backward()  # No need for retain_graph here as it's the last backward pass
+                torch_utils.clip_grad_norm_(self.generator.parameters(), max_norm=0.5)  # Apply gradient clipping
+                optim_gen.step()
+                scheduler_gen.step()
+                gen_loss_epoch += generator_loss.mean().item()
+                
+                # === Critic Step ===
+                # Directive: Build real samples properly and fake samples badly.
+                # L_D = L_D_real - k*L_D_fake
+                # L_D_real = abs(reconstructed_real_data - real_data)
+                # L_D_fake = abs(reconstructed_fake_data - fake_data)
+                
+                optim_critic.zero_grad()
+                    
+                # Generate fake data for critic
+                z = torch.randn(batch_size, self.noise_dim).to(device)
+                z = torch.cat([z, labels], dim=1)
+                fake_latent = self.generator(z).detach()
+                fake_data = self.decoder(fake_latent)
+                
+                # Fake data reconstructions:
+                fake_latent = self.encoder(fake_data)
+                fake_reconstructed = self.decoder(fake_latent)
+                
+                # Real data reconstructions:
+                real_latent = self.encoder(real_data)
+                real_reconstructed = self.decoder(real_latent)
+                
+                # Critic losses:
+                real_loss, _, _ = composite_loss(real_data, real_reconstructed)
+                fake_loss, _, _ = composite_loss(fake_data, fake_reconstructed)
+                critic_loss = real_loss - self.k_t * fake_loss
+
+                critic_loss.backward(retain_graph=True)  # Add retain_graph=True here
+                torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), max_norm=1.0)  # Apply gradient clipping
+                optim_critic.step()
+                scheduler_critic.step()
+                crit_loss_epoch += critic_loss.mean().item()
+
+                # === K_t Step ===
+                # Directive: Increase k if fake_loss is a lot bigger than the real_loss. 
+                # Gamma exists to anticipate real_loss > fake_loss and account for it.
+                # k_t = k_t + lr*(fake_loss - gamma * real_loss)
+                with torch.no_grad():
+                    real_loss_mean = real_loss.mean()
+                    fake_loss_mean = fake_loss.mean()
+                    self.k_t = max(0, min(1, self.k_t + self.lambda_k * (fake_loss_mean - self.gamma * real_loss_mean))) # Clip to ensure k > 0
+            
+            # Log the losses
+            gen_loss_epoch /= len(train_loader)
+            crit_loss_epoch /= len(train_loader)
+            gen_losses.append(gen_loss_epoch)
+            crit_losses.append(crit_loss_epoch)
+            k_values.append(self.k_t)
+
+            print(f"[Training Status]: Epoch {epoch+1}: G Loss: {gen_loss_epoch:.4f}, "
+                  f"C Loss: {crit_loss_epoch:.4f}, Corr Loss: {corr_loss.item():.4f}, k_t: {self.k_t:.4f}")
+
+            if gen_loss_epoch < best_loss and epoch >= warm_up:
+                best_loss = gen_loss_epoch
+                best_epoch = epoch
+                stop_counter = 0
+                self.save_weights(epoch, gen_loss_epoch, crit_loss_epoch, save_path)
+            elif epoch >= warm_up:
+                stop_counter += 1
+                if stop_counter >= early_stop:
+                    print("[Training Status]: Early stopping triggered!")
+                    break
+
+        # Plot losses at the end of training
         self._plot_losses(gen_losses, crit_losses, k_values, best_epoch)
     
     
@@ -573,8 +787,6 @@ if __name__ == "__main__":
             noise_dim=NOISE_DIM, 
             device=DEVICE
         )
-        print('Synthetic Data:')
-        print(synthetic)
     
     elif MODEL_NAME == 'cgan':
         print("[Main]: Training a WcGAN model...")

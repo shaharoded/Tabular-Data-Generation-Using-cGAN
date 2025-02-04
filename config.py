@@ -9,7 +9,7 @@ DATA_DIR_PATH = 'Data'
 FULL_DATA_PATH = os.path.join(DATA_DIR_PATH, 'adult.arff')
 TARGET_COLUMN = 'income'
 TRAINED_MODELS_DIR_PATH = 'Trained Models'
-MODEL_NAME = 'gan'  # Change between model types ['gan', 'cgan']
+MODEL_NAME = 'cgan'  # Change between model types ['gan', 'cgan']
 SAVE_PATH = os.path.join(TRAINED_MODELS_DIR_PATH, MODEL_NAME)
 PRETRAIN_PATH = os.path.join(SAVE_PATH, 'best_model.pth')
 
@@ -73,13 +73,13 @@ DECODER_CONFIG = [
 
 # GAN\AE Training Config
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BASE_LEARNING_RATE = 2e-4    
-WEIGHT_DECAY = 5e-4
-LAMBDA_K = 1e-1     # Learning rate for `k_t` balance term, for BEGAN.
-LAMBDA_CORR = 0.1   # Level of influence of the correlation loss on global loss
+BASE_LEARNING_RATE = 5e-4    
+WEIGHT_DECAY = 1e-3
+LAMBDA_K = 1e-2     # Learning rate for `k_t` balance term, for BEGAN.
+LAMBDA_CORR = 5e-4   # Level of influence of the correlation loss on global loss
 GAMMA = 0.75        # BEGAN balance factor
-GAN_EARLY_STOP = 10     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
+GAN_EARLY_STOP = 25     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
 AE_EARLY_STOP = 10     # Stop after |EARLY_STOP| epochs with no improvement in the total loss
-WARMUP_EPOCHS = 10  # Define a number of GAN warmup iterations in which the model won't count towards an early stop.
-EPOCHS = 100    #   A high number of epochs, hoping for an early stopping 
+WARMUP_EPOCHS = 25  # Define a number of GAN warmup iterations in which the model won't count towards an early stop.
+EPOCHS = 250    #   A high number of epochs, hoping for an early stopping 
 GENERATOR_UPDATE_FREQ = 3   # Number of G updates per D updates, to balance their losses.
