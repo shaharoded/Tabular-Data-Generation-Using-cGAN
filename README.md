@@ -78,7 +78,7 @@ NOTE: This model requires longer training session, and can benefit from 100+ epo
 
 ## Results
 
-The current implementation showed insufficient results, sufferring from difficulties in handeling the categorical data (one-hot encoded) properly. Currently, `gan.py` models performed better than `ae_gan.py` models. The `began.py` models showed slight improvement in the efficiency score, but were still unable to fool the Random Forest model. Attached are the current results from the `began.py` module, `BEGAN` model:
+The current implementation for the GAN models (`gan.py`) showed insufficient results, sufferring from difficulties in handeling the categorical data (one-hot encoded) properly. We hoped to improve the models using the BEGAN architectures (`began.py`) but those failed pretty badly. Attached are the results using the vanilla GAN, which performed slightly better than the vanilla cGAN:
 
 ### Detection Metric
 
@@ -102,7 +102,7 @@ Efficacy Score: 0.6848
 
 One of the most critical evaluations of the generated data is how well the feature distributions of real and synthetic datasets match. Below is a comparison of the feature distributions, highlighting the effectiveness of the model in replicating the real data distribution.
 
-![Feature Distribution](./Images/features_analysis_cGAN.png)
+![Feature Distribution](./Images/features_analysis_GAN.png)
 
 The plots show histograms of features from both real and synthetic datasets. Ideally, the synthetic data's feature distributions should closely resemble those of the real data.
 
@@ -110,7 +110,7 @@ The plots show histograms of features from both real and synthetic datasets. Ide
 
 Another critical evaluation metric is the correlation between features. The heatmap below illustrates the difference in correlations between the real and synthetic data, highlighting any discrepancies in feature relationships.
 
-![Correlation Heatmap](./Images/cBEGAN_corr.png)
+![Correlation Heatmap](./Images/GAN_corr.png)
 
 The closer the correlation difference is to zero, the better the synthetic data mimics the real data in terms of feature interrelationships. We can see a few features which were learnt badly by the model, probably causing the model's inability to fool the Random Forest classifier.
 
