@@ -174,7 +174,7 @@ class GAN(nn.Module):
         
         scheduler_disc = optim.lr_scheduler.OneCycleLR(
             optim_disc,
-            max_lr=lr/2,
+            max_lr=lr/4,
             epochs=epochs,
             steps_per_epoch=len(train_loader),
             pct_start=0.3,
